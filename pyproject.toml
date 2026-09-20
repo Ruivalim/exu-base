@@ -51,6 +51,21 @@ exu-evaluate = "exu.evaluate:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/exu"]
 
+# A dataset or a checkpoint must never leave this machine inside a distribution:
+# PyPI uploads cannot be undone, and a local `uv publish` builds from the working
+# tree, where `data/` and a stray root-level JSONL are not version controlled and
+# therefore not ignored by the builder.
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "/data",
+  "/artifacts",
+  "/runs",
+  "/_site",
+  "/dist",
+  "/graft",
+  "/*.jsonl",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
