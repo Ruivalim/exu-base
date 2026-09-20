@@ -70,6 +70,22 @@ def test_record_round_trip_preserves_structure_and_family() -> None:
     ]
 
 
+def test_a_string_state_that_looks_like_json_comes_back_structured() -> None:
+    """The record format stores the state as a string, so that type is not kept.
+
+    Documented rather than worked around: the text the model reads is identical
+    either way, and the JSON guess is what makes a structured state come back
+    whole.
+    """
+    example = TrainingExample.from_record(record() | {"state": '{"x":1}'})
+
+    written = example.to_record()
+    restored = TrainingExample.from_record(written)
+
+    assert written["state"] == {"x": 1}
+    assert restored.state == '{"x":1}'
+
+
 def test_jsonl_loader_filters_an_explicit_split(tmp_path) -> None:
     train = record()
     train["split"] = "train"

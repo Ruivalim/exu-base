@@ -41,7 +41,8 @@ targets from several annotators or a teacher model are first-class.
 Rules that matter, with the full list in [dataset-format.md](dataset-format.md):
 
 - `target` must sum to one, cannot be negative, and must be one value per option.
-  Training refuses anything else, with the record's `id` in the message.
+  Training refuses anything else, naming the line in the file and the field that
+  is wrong.
 - `split` is what `--train-split`, `--validation-split` and `--calibration-split`
   select. Put several splits in one file if you like; the flags do the filtering.
 - `family` is the task family. **Split held-out by family, not by example**, or

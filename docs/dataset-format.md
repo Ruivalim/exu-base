@@ -26,7 +26,7 @@ record per line.
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | Non-empty. Appears in error messages. |
+| `id` | yes | Non-empty. Your own bookkeeping: it is not used for dedup, and errors name the line number instead. |
 | `state` | yes | String, object or list. Objects and lists become compact JSON without non-ASCII escapes. |
 | `question.kind` | yes | `choice`, `score` or `noul`. |
 | `question.instruction` | yes | Non-empty. The question text the model reads. |

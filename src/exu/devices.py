@@ -1,9 +1,12 @@
 """Device and precision selection.
 
-Tries CUDA, then MPS, then CPU. bfloat16 only on CUDA devices with capability 8
-or more (Ampere and later), float16 below that, float32 on CPU and MPS. Autocast
-only on CUDA. A CPU fallback is always announced with its real cost, because a
-call that took 40 ms on a GPU takes a few hundred on CPU.
+`auto` takes the best device available, in order CUDA, MPS, CPU. A device asked
+for by name that is not there raises rather than falling back silently, because
+a caller that pinned a device wants to know. The dtype is picked from the device:
+bfloat16 on CUDA capability 8 or more (Ampere and later), float16 below that,
+float32 everywhere else. Autocast only wraps CUDA forwards, and the checkpoint
+itself always loads in float32: precision here is how a forward pass is computed,
+not what is stored on disk.
 """
 
 from __future__ import annotations

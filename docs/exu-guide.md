@@ -321,8 +321,9 @@ When comparing models, use identical questions byte for byte and a fixed seed.
 ## Phase 12: runtime and packaging
 
 Checkpoint format: a config file with the encoder identifier, head layer count,
-both token limits, action costs and temperatures (here the load precision is
-resolved from the device, so it is not stored); one safetensors
+both token limits, action costs and temperatures (the checkpoint is not stored at
+a fixed precision: it loads in float32 and the device chooses the autocast dtype
+for a forward pass, so there is nothing to record); one safetensors
 weight file with everything inside, encoder included; one folder with the encoder
 architecture only, so loading never downloads pretrained weights that would be
 overwritten anyway; and the tokenizer.

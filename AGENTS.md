@@ -14,9 +14,10 @@ behind its System One models: the term is theirs, the toolkit is this project's.
   `score` (place the state on an ordinal rubric) or `noul` (boolean). All three
   are the same mechanism, a softmax over explicit options.
 - The answer is a distribution over those options plus a separate `confidence`.
-  Confidence is not the maximum probability: they are different scales and the
-  runtime exposes both. Read `docs/evaluation.md` before putting a business
-  threshold on either.
+  The runtime exposes two scales: `confidence`, which is the maximum probability,
+  and `entropy_confidence`, one minus normalized entropy, which is smaller for the
+  same distribution. Read `docs/evaluation.md` before putting a business threshold
+  on either.
 - Training maximizes a strictly proper scoring rule, so reporting honest
   probabilities is the optimum of the objective. `--mode baseline` optimizes the
   same score directly; `--mode rlcd` adds the perturbed-logit policy gradient.

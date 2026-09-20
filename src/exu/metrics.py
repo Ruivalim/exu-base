@@ -182,10 +182,11 @@ def majority_class_baseline(examples: Sequence[TrainingExample]) -> Tensor:
 def random_baseline(examples: Sequence[TrainingExample]) -> Tensor:
     """The guess-a-label forecast: uniform ``1/K`` over each question's options.
 
-    Deterministic, and the weakest thing worth reporting. It is perfectly
-    calibrated by construction and carries no information, which is exactly what
-    makes it a useful floor: any model that cannot beat it on NLL has learned
-    nothing, and any model whose ECE is worse has invented confidence.
+    Deterministic, and the weakest thing worth reporting. It carries no
+    information, which is what makes it a useful floor: any model that cannot
+    beat it on NLL has learned nothing. Its ECE is not zero, because a 15-bin
+    ECE reads a maximum probability of ``1/K`` as slight miscalibration; see
+    `docs/evaluation.md` for what that does and does not mean.
     """
     targets, mask, _kinds, _counts = stack_examples(examples)
     result = mask.to(targets.dtype)

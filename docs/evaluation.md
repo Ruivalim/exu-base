@@ -40,8 +40,8 @@ The runtime exposes both. Do not copy a threshold across the two.
 Every report includes uniform guessing (flat `1/K` over the valid options), the
 per-question prior (the mean target for that question) and the majority class.
 The prior is usually the strongest trivial baseline. The uniform forecast is the
-floor: completely uninformative, and it pins the log score at exactly `log K`
-when the question's option count matches (verified in the tests), so a model that
+floor: completely uninformative, and it pins the NLL at exactly `log K` when the
+question's option count matches (verified in the tests), so a model that
 cannot beat it has learned nothing. Its `ECE` is not zero: the maximum
 probability is `1/K`, and a 15-bin ECE reads that as a small miscalibration. Do
 not pool questions with different option counts when reading the uniform

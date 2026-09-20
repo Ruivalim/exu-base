@@ -251,7 +251,14 @@ def _serialize_state(value: Any) -> str:
 
 
 def _parse_state(value: str) -> Any:
-    """Recover the original structure so a round trip is lossless."""
+    """Recover a structure when the state was written as JSON.
+
+    The record format stores the state as a string, so a dictionary or a list
+    comes back as one. A *string* that merely looks like JSON is
+    indistinguishable here and comes back as a structure too; the text the model
+    reads is the same either way, which is why this is documented and not worked
+    around.
+    """
     stripped = value.lstrip()
     if stripped.startswith(("{", "[")):
         try:

@@ -47,6 +47,12 @@ task is a new question, not a new output layer. No retraining to add a label.
 ## Install
 
 ```bash
+uv add exu-base      # or: pip install exu-base
+```
+
+To work on this repository itself, install from the source tree:
+
+```bash
 uv sync --extra dev
 ```
 

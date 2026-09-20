@@ -328,8 +328,9 @@ Ao comparar modelos, use perguntas idênticas byte a byte e seed fixa.
 
 Formato do checkpoint: um arquivo de config com o identificador do encoder, o
 número de camadas da cabeça, os dois limites de tokens, os custos de ação e as
-temperaturas (aqui a precisão de carga é resolvida a partir do dispositivo, então
-não é guardada); um arquivo único de pesos em safetensors com tudo dentro, encoder
+temperaturas (o checkpoint não é guardado numa precisão fixa: ele carrega em
+float32 e o dispositivo escolhe o dtype do autocast no forward, então não há o que
+registrar); um arquivo único de pesos em safetensors com tudo dentro, encoder
 incluído; uma pasta só com a arquitetura do encoder, para o carregamento nunca
 baixar pesos pré-treinados que seriam sobrescritos de qualquer forma; e o
 tokenizer.
