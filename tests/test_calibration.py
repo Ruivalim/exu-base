@@ -104,6 +104,33 @@ def test_map_round_trips_through_a_dict() -> None:
     assert restored.temperature("choice", 5) == 1.2
 
 
+def test_map_fits_a_bucket_across_several_option_counts() -> None:
+    """Regression: each option count was fitted apart and written to one key.
+
+    A bucket spans a range of option counts, so fitting per exact count applied
+    `min_samples` to the wrong population and let the last count overwrite every
+    earlier one under the same bucket key.
+    """
+    torch.manual_seed(3)
+    logits = torch.randn(30, 4)
+    mask = torch.ones(30, 4, dtype=torch.bool)
+    mask[:15, 3] = False
+    target = torch.softmax(logits / 1.5, dim=-1)
+    target[:15, 3] = 0.0
+    target[:15] = target[:15] / target[:15].sum(dim=-1, keepdim=True)
+    kinds = ["choice"] * 30
+    counts = [3] * 15 + [4] * 15
+
+    temperature, fits = fit_temperature_map(
+        logits, target, mask, kinds, counts, min_samples=30, by_bucket=True
+    )
+
+    bucket = fits["bucket:choice:3-5"]
+    assert bucket.samples == 30
+    assert bucket.fallback is False
+    assert temperature.by_bucket["choice:3-5"] == pytest.approx(1.5, rel=0.3)
+
+
 def test_map_skips_cells_without_enough_rows() -> None:
     torch.manual_seed(2)
     logits = torch.randn(80, 3)

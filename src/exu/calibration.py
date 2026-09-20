@@ -77,7 +77,11 @@ def fit_temperature(
     max_iter: int = 100,
     learning_rate: float = 0.1,
 ) -> TemperatureFit:
-    """Fit ``T`` by minimizing NLL with LBFGS on ``log T``.
+    """Fit ``T`` by minimizing NLL with LBFGS over a bounded sigmoid.
+
+    ``T`` is ``low + (high - low) * sigmoid(raw)``, so a line search can neither
+    leave ``bounds`` nor overflow the closure. The sigmoid does not reach a bound
+    exactly, so the outer 0.1% of the range is reported as ``at_bound``.
 
     Below ``min_samples`` rows the fit is skipped and ``T = 1`` is returned with
     ``fallback`` set: a temperature fitted on a handful of points is worse than
@@ -242,17 +246,11 @@ def fit_temperature_map(
             if not cell.fallback:
                 result.by_type[kind] = cell.temperature
     if by_bucket:
-        pairs = sorted({(kind, count) for kind, count in zip(kinds, option_counts, strict=True)})
-        for kind, count in pairs:
-            selector = [
-                index
-                for index, (row_kind, row_count) in enumerate(
-                    zip(kinds, option_counts, strict=True)
-                )
-                if row_kind == kind and row_count == count
-            ]
+        cells: dict[str, list[int]] = {}
+        for index, (kind, count) in enumerate(zip(kinds, option_counts, strict=True)):
+            cells.setdefault(bucket_key(kind, count), []).append(index)
+        for key, selector in sorted(cells.items()):
             cell = fit(selector)
-            key = bucket_key(kind, count)
             fits[f"bucket:{key}"] = cell
             if not cell.fallback:
                 result.by_bucket[key] = cell.temperature
