@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ruivalim/exu-base/actions/workflows/ci.yml/badge.svg)](https://github.com/ruivalim/exu-base/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/Ruivalim/exu-base/blob/main/LICENSE)
 
 Train encoder-only decision models that answer with **probability distributions**
 instead of generated text. You give a state and a question with explicit options;
@@ -90,7 +90,7 @@ same strictly proper score directly, with no sampling. Train the baseline first:
 it is the bar the RLCD mode has to beat on held-out ECE or NLL.
 
 The step-by-step version, from writing the records to reading the report and the
-failure modes, is [docs/usage-guide.md](docs/usage-guide.md).
+failure modes, is [docs/usage-guide.md](https://github.com/Ruivalim/exu-base/blob/main/docs/usage-guide.md).
 
 ## Evaluate
 
@@ -139,7 +139,8 @@ targets from several annotators or a teacher model are first-class.
 }
 ```
 
-See [docs/dataset-format.md](docs/dataset-format.md) for the full field list and
+See [docs/dataset-format.md](https://github.com/Ruivalim/exu-base/blob/main/docs/dataset-format.md)
+for the full field list and
 the rules that keep held-out honest.
 
 ## How it works
@@ -151,8 +152,10 @@ perturbations of the logits and rewards each candidate distribution with a
 strictly proper scoring rule. Then a temperature map, fitted on held-out data,
 brings confidence in line with accuracy.
 
-The full walkthrough is in [docs/exu-guide.md](docs/exu-guide.md), and
-[docs/algorithm.md](docs/algorithm.md) has the reward and policy math.
+The full walkthrough is in
+[docs/exu-guide.md](https://github.com/Ruivalim/exu-base/blob/main/docs/exu-guide.md), and
+[docs/algorithm.md](https://github.com/Ruivalim/exu-base/blob/main/docs/algorithm.md) has the
+reward and policy math.
 
 ## Development
 
@@ -208,6 +211,7 @@ repository implements it.
 
 ## License
 
-Code under [MIT](LICENSE). Datasets and checkpoints carry their own licenses.
+Code under [MIT](https://github.com/Ruivalim/exu-base/blob/main/LICENSE). Datasets and
+checkpoints carry their own licenses.
 Before publishing an artifact, confirm the encoder, tokenizer, data and resulting
 weights are compatible.
