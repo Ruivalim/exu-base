@@ -233,13 +233,16 @@ class ExuModel(nn.Module):
 
 
 def _distribution_features(probabilities: Tensor, option_mask: Tensor) -> Tensor:
-    """Four gradient-free statistics of each distribution, before temperature."""
+    """Four gradient-free statistics of each distribution, after temperature."""
     valid_options = option_mask.sum(dim=-1).clamp_min(1).to(probabilities.dtype)
     max_probability = probabilities.max(dim=-1).values
     top_two = probabilities.topk(k=min(2, probabilities.size(-1)), dim=-1).values
     margin = top_two[:, 0] - (top_two[:, 1] if top_two.size(-1) == 2 else 0.0)
     safe = probabilities.clamp_min(torch.finfo(probabilities.dtype).tiny)
     entropy = -(safe * safe.log()).sum(dim=-1)
-    normalized_entropy = entropy / valid_options.log().clamp_min(1.0)
+    # Divide by log(K), not by 1 for every small K: with the old floor a noul
+    # question capped this feature at 0.69 while the runtime's entropy_confidence
+    # normalised it properly, so the two disagreed for two-option questions.
+    normalized_entropy = entropy / valid_options.clamp_min(2.0).log()
     option_fraction = valid_options / 255.0
     return torch.stack((max_probability, margin, normalized_entropy, option_fraction), dim=-1)
