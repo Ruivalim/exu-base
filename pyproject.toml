@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling>=1.32.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -28,13 +28,13 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-  "safetensors>=0.5",
-  "torch>=2.4",
-  "transformers>=4.48",
+  "safetensors>=0.8.0",
+  "torch>=2.14.0",
+  "transformers>=5.17.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3", "ruff>=0.9"]
+dev = ["pytest>=9.1.1", "ruff>=0.16.8"]
 
 [project.urls]
 Homepage = "https://github.com/ruivalim/rlcd-base"
