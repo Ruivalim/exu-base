@@ -26,7 +26,7 @@ Two properties matter and are tested:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -126,7 +126,7 @@ class SequenceBuilder:
         option_ids = [self._encode(self._clean(option.render())) for option in question.options]
 
         option_limits, instruction_limit = self._allocate_header(
-            len(question.options), len(prefix_ids)
+            [len(ids) for ids in option_ids], len(prefix_ids)
         )
         header = [self._required(self.tokenizer.cls_token_id), *prefix_ids]
         header.extend(instruction_ids[:instruction_limit])
@@ -182,30 +182,57 @@ class SequenceBuilder:
             "question_type_ids": [item.question_type_id for item in encoded],
         }
 
-    def _allocate_header(self, option_count: int, prefix_length: int) -> tuple[list[int], int]:
-        separator_count = option_count + 2  # after instruction, every option, final state
-        fixed = 1 + prefix_length + separator_count + option_count  # CLS + separators + markers
+    def _allocate_header(
+        self, option_lengths: Sequence[int], prefix_length: int
+    ) -> tuple[list[int], int]:
+        """Split the header budget between the instruction and the options.
+
+        An option that is already shorter than its ceiling reserves what it needs,
+        not the ceiling. Only when the instruction would fall below
+        ``min_instruction_tokens`` do the options cede, and then every option is
+        capped to an equal share, never below ``min_option_text_tokens``. An
+        option list that cannot fit even that raises, because a question whose
+        option texts have become indistinguishable is worse than no question.
+        """
+        count = len(option_lengths)
+        if count == 0:
+            raise ValueError("a question needs at least one option")
+        separator_count = count + 2  # after the instruction, every option, final state
+        fixed = 1 + prefix_length + separator_count + count  # CLS + separators + markers
         available = self.config.header_budget - fixed
-        minimum = (
-            self.config.min_instruction_tokens + option_count * self.config.min_option_text_tokens
-        )
+        minimum = self.config.min_instruction_tokens + count * self.config.min_option_text_tokens
         if available < minimum:
             raise ValueError("too many options for configured header_budget")
 
         option_cap = self.config.max_option_tokens - 1
-        option_total = min(
-            option_count * option_cap, available - self.config.min_instruction_tokens
-        )
-        base, remainder = divmod(option_total, option_count)
-        option_limits = [base + int(index < remainder) for index in range(option_count)]
-        instruction_limit = available - sum(option_limits)
-        return option_limits, instruction_limit
+        natural = [min(length, option_cap) for length in option_lengths]
+        spare = available - sum(natural)
+        if spare >= self.config.min_instruction_tokens:
+            return natural, spare
+
+        share, remainder = divmod(available - self.config.min_instruction_tokens, count)
+        limits = [
+            min(length, share + int(index < remainder)) for index, length in enumerate(natural)
+        ]
+        return limits, available - sum(limits)
 
     def _clean(self, value: str) -> str:
+        """Strip the literal mask string from untrusted text, repeatedly.
+
+        One pass is not enough: ``[MA[MASK]SK]`` loses its inner occurrence and
+        leaves a literal ``[MASK]`` behind, which the tokenizer then turns into a
+        real mask token and the scorer reads as an option marker. Only the mask
+        token is stripped here; other special tokens stay as plain text.
+        """
         if not isinstance(value, str):
             raise TypeError("state and question text must be strings")
         token = self.tokenizer.mask_token
-        return value.replace(token, "") if token else value
+        if not token:
+            return value
+        cleaned = value
+        while token in cleaned:
+            cleaned = cleaned.replace(token, "")
+        return cleaned
 
     def _encode(self, value: str) -> list[int]:
         return self.tokenizer.encode(value, add_special_tokens=False)
