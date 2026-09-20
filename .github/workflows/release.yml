@@ -32,5 +32,16 @@ jobs:
       # PyPI without passing the same check CI runs.
       - name: Lint, test and build
         run: make check
+      - name: Check that the tag matches the project version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -eu
+          version=$(uv run python -c "import pathlib, tomllib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          tagged="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tagged" ]; then
+            echo "pyproject.toml says $version but the tag says $tagged" >&2
+            exit 1
+          fi
+          echo "tag v$tagged matches the project version"
       - name: Publish
         run: uv publish --trusted-publishing always
