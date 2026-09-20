@@ -10,6 +10,7 @@ from exu.augmentation import (
     permute_example,
     permute_target,
     random_order,
+    shuffle_example,
 )
 from exu.data import TrainingExample
 
@@ -56,3 +57,38 @@ def test_shuffler_is_deterministic_for_a_seed() -> None:
         option.name for option in second.question.options
     ]
     assert sorted(option.name for option in first.question.options) == ["A", "B", "C"]
+
+
+def test_score_questions_are_never_shuffled() -> None:
+    """Regression: permuting the levels of an ordinal question broke the RPS term.
+
+    The levels are the meaning of the option order, so a shuffle keeps the target
+    aligned while destroying the distance the ordinal reward reads. The symptom
+    was a far miss scoring better than a near one.
+    """
+    question = DecisionQuestion.score("How urgent?", ["low", "normal", "high"])
+    ordinal = TrainingExample("x", "state", question, (0.0, 0.1, 0.9), family="urgency")
+
+    for seed in range(5):
+        shuffled = shuffle_example(ordinal, random.Random(seed))
+        assert shuffled is ordinal
+        assert [option.name for option in shuffled.question.options] == [
+            "Level 0",
+            "Level 1",
+            "Level 2",
+        ]
+
+
+def test_noul_and_choice_questions_are_still_shuffled() -> None:
+    question = DecisionQuestion.choice("Pick", [Option("A"), Option("B"), Option("C")])
+    example_ = TrainingExample("x", "state", question, (0.1, 0.2, 0.7), family="f")
+
+    orders = {
+        tuple(
+            option.name
+            for option in shuffle_example(example_, random.Random(seed)).question.options
+        )
+        for seed in range(8)
+    }
+
+    assert len(orders) > 1

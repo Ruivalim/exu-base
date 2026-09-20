@@ -4,6 +4,10 @@ The most important one is option shuffling. Without it the model learns
 position: in Laya the winning option changed in 15% to 23% of
 cases when the option order was permuted. Shuffling every pass makes position
 uninformative, and evaluating on permutations measures whether it worked.
+
+`score` questions are the exception, and the one case worth stating out loud:
+their options are the ordinal levels, so the order is the meaning. See
+:func:`shuffle_example`.
 """
 
 from __future__ import annotations
@@ -12,7 +16,7 @@ import random
 from collections.abc import Sequence
 
 from .data import TrainingExample
-from .types import DecisionQuestion
+from .types import DecisionQuestion, DecisionType
 
 
 def random_order(size: int, generator: random.Random) -> list[int]:
@@ -49,7 +53,16 @@ def permute_example(example: TrainingExample, order: Sequence[int]) -> TrainingE
 
 
 def shuffle_example(example: TrainingExample, generator: random.Random) -> TrainingExample:
-    """Return the example with its options permuted."""
+    """Return the example with its options permuted.
+
+    A `score` question comes back untouched. Its options are the ordinal levels,
+    so position encodes distance and the ranked probability score reads that
+    order. Permuting options and target together keeps the labels consistent but
+    destroys the ordering the ordinal term depends on, and the symptom is nasty:
+    a far miss ends up scoring better than a near one.
+    """
+    if example.question.kind is DecisionType.SCORE:
+        return example
     return permute_example(example, random_order(example.option_count, generator))
 
 
