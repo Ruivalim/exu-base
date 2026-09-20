@@ -41,5 +41,36 @@ implements is RLCD, and that name belongs to TypeSafe.
   scales.
 - Static explainer site with interactive scoring-rule and policy-gradient demos.
 
+### Fixed
+
+Found by an external review before this first release, and fixed here:
+
+- The header budget reserved each option's ceiling instead of its real length, so
+  any question with four or more options pinned the instruction to its 8-token
+  floor and left most of the header unused. The question was silently truncated.
+- `--option-shuffle` permuted ordinal questions too, which broke the ranked
+  probability score: a far miss could score better than a near one.
+- A `score` question raised `RuntimeError` on CUDA, because the level tensor was
+  built on the CPU while the probabilities were on the device.
+- Temperatures were fitted per exact option count but stored per bucket, so in a
+  bucket holding several counts the last one overwrote the rest, and
+  `min_samples` measured the wrong population.
+- Literal mask text with an interleaved occurrence (`[MA[MASK]SK]`) left a real
+  mask token behind, which the scorer then read as an extra option marker.
+- One record without a `family` erased the entire per-family report.
+- The last accumulation group of an epoch was scaled by the full `grad_accum`,
+  and the sigma schedule stopped one step short of `sigma_end`.
+- `--log-every 0`, documented as "0 disables step logs", was rejected by the
+  argument parser.
+
+### Changed
+
+- The source distribution excludes `data/`, `artifacts/` and root-level JSONL
+  files, so a local `uv publish` can never upload a dataset: PyPI releases cannot
+  be undone.
+- The release workflow refuses a tag that does not match the project version.
+- The explainer site mirrors the fixed budget allocator, anneals sigma linearly
+  like the library, and its dim text clears WCAG AA contrast.
+
 [Unreleased]: https://github.com/ruivalim/exu-base/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/ruivalim/exu-base/releases/tag/v0.1.0
