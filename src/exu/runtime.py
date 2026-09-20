@@ -115,7 +115,7 @@ class DecisionRuntime:
         normalized = _normalized_entropy(probs)
         expected_level: float | None = None
         if question.kind is DecisionType.SCORE:
-            levels = torch.arange(count, dtype=probs.dtype)
+            levels = torch.arange(count, dtype=probs.dtype, device=probs.device)
             expected_level = float((probs * levels).sum().item())
         return Decision(
             kind=question.kind.value,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import torch
 from helpers import save_tiny_checkpoint
 
 from exu import DecisionQuestion, DecisionRuntime, Option
@@ -55,3 +56,21 @@ def test_runtime_batches_distinct_questions(runtime) -> None:
 def test_runtime_rejects_an_empty_batch(runtime) -> None:
     with pytest.raises(ValueError, match="empty"):
         runtime.decide_many([])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test_ordinal_question_on_cuda_does_not_mix_devices(tmp_path) -> None:
+    """Regression: the level tensor was built on CPU, so `score` crashed on GPU.
+
+    `DecisionRuntime.load` defaults to `device="auto"`, so this is the path a GPU
+    user hits first. The rest of the suite runs on CPU, which is why it did not
+    catch this, and CI has no GPU either: it only runs where one exists.
+    """
+    save_tiny_checkpoint(tmp_path / "checkpoint")
+    runtime = DecisionRuntime.load(tmp_path / "checkpoint", device="cuda")
+    question = DecisionQuestion.score("How urgent?", ["low", "normal", "high"])
+
+    decision = runtime.decide("nothing is on fire", question)
+
+    assert decision.expected_level is not None
+    assert 0.0 <= decision.expected_level <= 2.0
