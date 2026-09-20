@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "RLCD: reinforcement learning for calibrated decisions"
+abstract: >-
+  An agnostic base for training encoder-only models that answer typed questions
+  with probability distributions instead of generated text. Training uses a
+  strictly proper scoring rule as the reward, so honest probabilities are the
+  optimum of the objective. Includes a perturbed-logit policy-gradient trainer,
+  held-out temperature calibration, calibration-aware evaluation and an offline
+  inference runtime.
+type: software
+authors:
+  - family-names: Valim
+    given-names: Rui
+license: MIT
+repository-code: "https://github.com/ruivalim/rlcd-base"
+url: "https://ruivalim.github.io/rlcd-base/"
+keywords:
+  - calibration
+  - decision-making
+  - proper scoring rules
+  - reinforcement learning
+  - encoder-only
+  - rlcd

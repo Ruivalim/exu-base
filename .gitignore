@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+build/
+dist/
+
+# Local training output, datasets and checkpoints are never committed.
+artifacts/
+runs/
+*.safetensors
+!tests/fixtures/**/*.safetensors
+
+# Static app build output
+_site/
+
+# OS and editor
+.DS_Store
+.idea/
+.vscode/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

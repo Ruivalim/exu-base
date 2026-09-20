@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rlcd"
+version = "0.1.0"
+description = "Reinforcement learning for calibrated decisions: train encoder-only models that return probability distributions, not text"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Rui Valim" }]
+keywords = [
+  "calibration",
+  "decision-making",
+  "proper-scoring-rules",
+  "reinforcement-learning",
+  "rlcd",
+  "encoder",
+]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "safetensors>=0.5",
+  "torch>=2.4",
+  "transformers>=4.48",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "ruff>=0.9"]
+
+[project.urls]
+Homepage = "https://github.com/ruivalim/rlcd-base"
+Documentation = "https://ruivalim.github.io/rlcd-base/"
+Issues = "https://github.com/ruivalim/rlcd-base/issues"
+Changelog = "https://github.com/ruivalim/rlcd-base/blob/main/CHANGELOG.md"
+
+[project.scripts]
+rlcd-train = "rlcd.train:main"
+rlcd-evaluate = "rlcd.evaluate:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rlcd"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]

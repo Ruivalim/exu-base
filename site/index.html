@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RLCD: decisions that come with honest numbers</title>
+    <meta
+      name="description"
+      content="RLCD trains encoder-only models that answer typed questions with probability distributions, using a strictly proper scoring rule as the reward. How it works, and how to build one."
+    />
+    <meta name="color-scheme" content="dark" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=Public+Sans:ital,wght@0,300;0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="masthead">
+      <p class="eyebrow">Calibration instrument <span class="dot" aria-hidden="true"></span> pre-alpha</p>
+      <h1>Decisions that come with<br />honest numbers</h1>
+      <p class="lead">
+        RLCD trains encoder-only models that answer a typed question with a
+        <strong>probability distribution</strong>, not a paragraph. The reward is a strictly
+        proper scoring rule, so the only way to raise it is to be honest about the odds.
+      </p>
+      <div class="masthead-actions">
+        <a class="button" href="#loop">Try the training loop</a>
+        <a class="button ghost" href="https://github.com/ruivalim/rlcd-base">Source and docs</a>
+      </div>
+      <div class="readout" id="hero-readout" aria-hidden="true">
+        <span class="readout-label">live softmax</span>
+        <div class="readout-bars" id="hero-bars"></div>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="section" id="failure">
+        <p class="eyebrow"><span class="num">01</span> The failure</p>
+        <h2>A reward of 1 or 0 teaches a model to lie with confidence</h2>
+        <p class="body">
+          Reward the model only for being right and its best move is to put all the mass on the
+          most likely option. Accuracy goes up, calibration falls apart. A scoring rule fixes
+          this: its expected value is highest when the reported odds are the true odds.
+        </p>
+        <div class="panel demo" data-demo="reward">
+          <div class="demo-head">
+            <span class="demo-title">Two options, true odds 70 / 30</span>
+            <span class="demo-hint">drag the confidence on the true option</span>
+          </div>
+          <svg class="chart" viewBox="0 0 640 260" role="img" aria-label="Reward curves against reported confidence">
+            <g class="chart-grid"></g>
+            <path class="chart-area" id="reward-area" />
+            <path class="chart-line" id="reward-line" />
+            <path class="chart-step" id="reward-step" />
+            <line class="chart-rule" id="reward-cursor" />
+            <circle class="chart-node" id="reward-node" r="5" />
+            <text class="chart-optimum" id="reward-optimum">honest optimum</text>
+          </svg>
+          <div class="demo-controls">
+            <label class="slider">
+              <span class="slider-label">Reported confidence on the true option</span>
+              <input id="reward-slider" type="range" min="5" max="99" value="95" />
+              <output class="mono" id="reward-value">0.95</output>
+            </label>
+          </div>
+          <dl class="stats" id="reward-stats">
+            <div><dt>log score</dt><dd class="mono" id="stat-log">0.000</dd></div>
+            <div><dt>spherical</dt><dd class="mono" id="stat-sph">0.000</dd></div>
+            <div><dt>binary reward</dt><dd class="mono" id="stat-bin">0.000</dd></div>
+          </dl>
+          <p class="caption" id="reward-caption"></p>
+        </div>
+      </section>
+
+      <section class="section" id="contract">
+        <p class="eyebrow"><span class="num">02</span> The contract</p>
+        <h2>One mechanism, three hats</h2>
+        <p class="body">
+          Options are written at request time and read as text, so a new task is a new question,
+          not a new output layer. <span class="mono">noul</span> is a choice with two fixed
+          options; <span class="mono">score</span> is a choice over ordinal levels.
+        </p>
+        <div class="panel demo" data-demo="primitives">
+          <div class="tabs" role="tablist" aria-label="Decision primitives">
+            <button class="tab" role="tab" aria-selected="true" data-kind="choice">choice</button>
+            <button class="tab" role="tab" aria-selected="false" data-kind="score">score</button>
+            <button class="tab" role="tab" aria-selected="false" data-kind="noul">noul</button>
+          </div>
+          <div class="primitive">
+            <div class="primitive-block">
+              <span class="label">state</span>
+              <p class="mono state" id="prim-state"></p>
+            </div>
+            <div class="primitive-block">
+              <span class="label">question</span>
+              <p class="mono" id="prim-question"></p>
+            </div>
+            <div class="primitive-block">
+              <span class="label">answer</span>
+              <div class="dist" id="prim-dist"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="sequence">
+        <p class="eyebrow"><span class="num">03</span> The sequence</p>
+        <h2>One sequence, one marker per option</h2>
+        <p class="body">
+          The model reads the options as text. A mask marker in front of each option is where its
+          score is read from, and because the encoder is bidirectional, that position already
+          sees the option, its rivals, the instruction and the state.
+        </p>
+        <div class="panel demo" data-demo="sequence">
+          <div class="demo-head">
+            <div class="segmented" role="group" aria-label="Primitive">
+              <button class="seg" aria-pressed="true" data-kind="choice">choice</button>
+              <button class="seg" aria-pressed="false" data-kind="score">score</button>
+              <button class="seg" aria-pressed="false" data-kind="noul">noul</button>
+            </div>
+            <label class="slider compact">
+              <span class="slider-label">options</span>
+              <input id="seq-options" type="range" min="2" max="20" value="4" />
+              <output class="mono" id="seq-options-value">4</output>
+            </label>
+          </div>
+          <div class="tape" id="seq-tape" aria-label="Token sequence"></div>
+          <div class="budget">
+            <div class="budget-bar" id="budget-bar"></div>
+            <ul class="legend">
+              <li><span class="swatch" style="background: var(--signal)"></span>instruction</li>
+              <li><span class="swatch" style="background: var(--warn)"></span>option text</li>
+              <li><span class="swatch" style="background: var(--dim)"></span>markers and separators</li>
+              <li><span class="swatch" style="background: var(--panel-2); border:1px solid var(--line)"></span>state (remainder)</li>
+            </ul>
+          </div>
+          <p class="caption" id="seq-caption"></p>
+        </div>
+      </section>
+
+      <section class="section" id="loop">
+        <p class="eyebrow"><span class="num">04</span> The loop</p>
+        <h2>Sample the logits, reward the candidates, step</h2>
+        <p class="body">
+          The policy perturbs its own logits instead of generating tokens. Perturbations that
+          scored above the group baseline pull the logits toward themselves. This is the real
+          update rule, running here on three options.
+        </p>
+        <div class="panel demo" data-demo="policy">
+          <div class="demo-head">
+            <span class="demo-title">Target: option B</span>
+            <span class="demo-hint">sigma anneals as you train</span>
+          </div>
+          <div class="policy">
+            <div class="policy-block">
+              <span class="label">logits</span>
+              <div class="dist large" id="policy-logits"></div>
+            </div>
+            <div class="policy-block">
+              <span class="label">8 sampled candidates</span>
+              <div class="candidates" id="policy-candidates"></div>
+            </div>
+          </div>
+          <div class="demo-controls">
+            <button class="button" id="policy-sample">Sample candidates</button>
+            <button class="button primary" id="policy-step" disabled>Apply policy step</button>
+            <button class="button ghost" id="policy-reset">Reset</button>
+            <span class="mono tally" id="policy-tally">step 0</span>
+          </div>
+          <dl class="stats" id="policy-stats">
+            <div><dt>mean reward</dt><dd class="mono" id="stat-reward">n/a</dd></div>
+            <div><dt>advantage spread</dt><dd class="mono" id="stat-adv">n/a</dd></div>
+            <div><dt>P(option B)</dt><dd class="mono" id="stat-b">0.333</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="section" id="do-it">
+        <p class="eyebrow"><span class="num">05</span> Do it</p>
+        <h2>From a labeled file to a portable checkpoint</h2>
+        <p class="body">
+          Train the direct baseline first, then the policy version, and keep the policy version
+          only if it wins on held-out ECE or NLL. Calibrate on held-out data and ship the
+          temperature map inside the checkpoint.
+        </p>
+        <div class="two-col">
+          <div class="panel code-panel">
+            <span class="label">install and train</span>
+            <pre class="code"><code>uv sync --extra dev
+
+rlcd-train \
+  --mode rlcd \
+  --train data.jsonl --train-split train \
+  --validation data.jsonl --validation-split validation \
+  --calibration data.jsonl --calibration-split calibration \
+  --output artifacts/my-model \
+  --encoder google-bert/bert-base-multilingual-cased \
+  --epochs 4 --batch-size 8 \
+  --option-shuffle --calibrate</code></pre>
+          </div>
+          <div class="panel code-panel">
+            <span class="label">evaluate and serve</span>
+            <pre class="code"><code>rlcd-evaluate \
+  --checkpoint artifacts/my-model \
+  --data data.jsonl --split test \
+  --order-permutations 4 --latency
+
+# then, in Python
+from rlcd import DecisionRuntime
+runtime = DecisionRuntime.load("artifacts/my-model")
+decision = runtime.decide(state, question)
+print(decision.label, decision.confidence)</code></pre>
+          </div>
+        </div>
+        <div class="panel checklist-panel">
+          <span class="label">exit criteria, in order</span>
+          <ol class="checklist">
+            <li>Sequence builder tested: truncation, many options, marker out of range, injected mask token.</li>
+            <li>Encoder chosen after measuring tokenizer fertility on your own text.</li>
+            <li>Held-out split by whole task family, never by example.</li>
+            <li>Direct baseline beats the per-question prior with margin.</li>
+            <li>RLCD beats the direct baseline on held-out ECE or NLL, otherwise it does not ship.</li>
+            <li>Temperatures fitted on held-out data, no value sitting on a bound.</li>
+            <li>Order robustness and selective coverage reported beside accuracy.</li>
+          </ol>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-col">
+        <span class="label">RLCD</span>
+        <p>
+          Reinforcement Learning for Calibrated Decisions. An agnostic base for training
+          encoder-only decision models. Pre-alpha: the API and the checkpoint format can change.
+        </p>
+      </div>
+      <div class="footer-col">
+        <span class="label">Read</span>
+        <ul>
+          <li><a href="https://github.com/ruivalim/rlcd-base/blob/main/docs/rlcd-guide.md">The guide</a></li>
+          <li><a href="https://github.com/ruivalim/rlcd-base/blob/main/docs/algorithm.md">Reward and policy math</a></li>
+          <li><a href="https://github.com/ruivalim/rlcd-base/blob/main/docs/evaluation.md">Evaluation</a></li>
+          <li><a href="https://github.com/ruivalim/rlcd-base/blob/main/docs/dataset-format.md">Dataset format</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <span class="label">Build</span>
+        <p class="mono small">
+          rev <span id="build-commit">__BUILD_COMMIT__</span><br />
+          v<span id="build-version">__BUILD_VERSION__</span>
+        </p>
+      </div>
+    </footer>
+
+    <script src="app.js" defer></script>
+  </body>
+</html>
