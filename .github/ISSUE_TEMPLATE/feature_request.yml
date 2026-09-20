@@ -1,0 +1,31 @@
+name: Feature request
+description: Propose a change in behavior, data or method
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is hard or impossible today, and for whom.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What you would change. If it touches training or calibration, say what metric would move.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence or references
+      description: Papers, datasets, or a run that supports the proposal. Note license and provenance for data.
+    validations:
+      required: false

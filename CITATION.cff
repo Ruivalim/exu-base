@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Exu: a toolkit for calibrated decision models"
+abstract: >-
+  An agnostic base for training encoder-only models that answer typed questions
+  with probability distributions instead of generated text. The training reward
+  is a strictly proper scoring rule, so honest probabilities are the optimum of
+  the objective. Implements RLCD, the method TypeSafe introduced for its System
+  One models, next to a direct baseline that optimizes the same score without
+  sampling. Includes held-out temperature calibration, calibration-aware
+  evaluation and an offline inference runtime.
+type: software
+authors:
+  - family-names: Valim
+    given-names: Rui
+license: MIT
+repository-code: "https://github.com/ruivalim/exu-base"
+url: "https://ruivalim.github.io/exu-base/"
+keywords:
+  - calibration
+  - decision-making
+  - proper scoring rules
+  - reinforcement learning
+  - rlcd
+  - encoder-only
+  - exu
