@@ -1,0 +1,36 @@
+name: Release
+
+# Publishes to PyPI using trusted publishing: GitHub mints a short-lived OIDC
+# token, so there is no API token stored in this repository. The matching
+# publisher is configured on PyPI (project exu-base, this repository, this
+# workflow file, environment "pypi").
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: build and publish
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/exu-base
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --extra dev
+      # A published version can be yanked but never replaced, so nothing reaches
+      # PyPI without passing the same check CI runs.
+      - name: Lint, test and build
+        run: make check
+      - name: Publish
+        run: uv publish --trusted-publishing always
