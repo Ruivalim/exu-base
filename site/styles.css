@@ -12,7 +12,7 @@
   --line-soft: #232b47;
   --ink: #e9edf9;
   --muted: #9aa4c2;
-  --dim: #6c7796;
+  --dim: #848fae;
   --signal: #46d3c4;
   --signal-2: #86e6dc;
   --warn: #f5a524;
@@ -597,6 +597,14 @@ input[type="range"]::-moz-range-thumb {
 .token.special {
   background: transparent;
   color: var(--dim);
+  padding-inline: 0.25rem;
+}
+
+/* The type prefix words. Not `.label`: that class is a display block, so sharing
+   it broke these chips onto one line each. */
+.token.prefix {
+  background: transparent;
+  color: var(--muted);
   padding-inline: 0.25rem;
 }
 

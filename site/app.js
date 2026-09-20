@@ -318,32 +318,33 @@
   // budget arithmetic below is the same.
   const tokens = (text) => text.split(/\s+/).filter(Boolean);
 
-  function allocate(optionCount, prefixLength, optionLengths) {
-    const separatorCount = optionCount + 2;
-    const fixed = 1 + prefixLength + separatorCount + optionCount;
+  function allocate(optionLengths, prefixLength) {
+    // Mirrors SequenceBuilder._allocate_header: an option already shorter than
+    // its ceiling reserves what it needs, not the ceiling, so short options do
+    // not eat header budget the instruction could use.
+    const count = optionLengths.length;
+    const separatorCount = count + 2;
+    const fixed = 1 + prefixLength + separatorCount + count;
     const available = SEQ.headerBudget - fixed;
-    const minimum = SEQ.minInstructionTokens + optionCount * SEQ.minOptionTextTokens;
+    const minimum = SEQ.minInstructionTokens + count * SEQ.minOptionTextTokens;
     if (available < minimum) {
       return { error: `too many options for a ${SEQ.headerBudget}-token header` };
     }
     const optionCap = SEQ.maxOptionTokens - 1;
-    const optionTotal = Math.min(
-      optionCount * optionCap,
-      available - SEQ.minInstructionTokens
+    const natural = optionLengths.map((length) => Math.min(length, optionCap));
+    const spare = available - natural.reduce((sum, value) => sum + value, 0);
+    if (spare >= SEQ.minInstructionTokens) {
+      return { optionLimits: natural, instructionLimit: spare };
+    }
+    const budget = available - SEQ.minInstructionTokens;
+    const share = Math.floor(budget / count);
+    const remainder = budget % count;
+    const optionLimits = natural.map((length, index) =>
+      Math.min(length, share + (index < remainder ? 1 : 0))
     );
-    const base = Math.floor(optionTotal / optionCount);
-    const remainder = optionTotal % optionCount;
-    const optionLimits = Array.from({ length: optionCount }, (_value, index) =>
-      base + (index < remainder ? 1 : 0)
-    );
-    const instructionLimit = available - optionLimits.reduce((sum, value) => sum + value, 0);
     return {
       optionLimits,
-      instructionLimit,
-      optionTextTotal: Math.min(
-        optionLimits.reduce((sum, limit, index) => sum + Math.min(limit, optionLengths[index]), 0),
-        optionTotal
-      ),
+      instructionLimit: available - optionLimits.reduce((sum, value) => sum + value, 0),
     };
   }
 
@@ -374,14 +375,14 @@
         tokens(data.options[index % data.options.length])
       );
       const optionLengths = optionTexts.map((words) => words.length);
-      const plan = allocate(count, prefixes.length, optionLengths);
+      const plan = allocate(optionLengths, prefixes.length);
 
       tape.textContent = "";
       const add = (text, className) => {
         tape.appendChild(tokenChip(text, className || ""));
       };
       add("[CLS]", "special");
-      prefixes.forEach((word) => add(word, "label"));
+      prefixes.forEach((word) => add(word, "prefix"));
       if (plan.error) {
         add(plan.error, "marker");
         bar.textContent = "";
@@ -401,18 +402,25 @@
         add("[SEP]", "special");
       });
 
+      // What the builder actually spends, not what it reserves: a short
+      // instruction does not fill its limit, and the state keeps the difference.
+      const instructionUsed = Math.min(instruction.length, plan.instructionLimit);
       const headerLength =
         1 +
         prefixes.length +
-        plan.instructionLimit +
+        instructionUsed +
         1 +
-        optionTexts.reduce((sum, words, index) => sum + 1 + Math.min(words.length, plan.optionLimits[index]) + 1, 0);
+        optionTexts.reduce(
+          (sum, words, index) =>
+            sum + 1 + Math.min(words.length, plan.optionLimits[index]) + 1,
+          0
+        );
       const stateLimit = Math.max(0, SEQ.maxLength - headerLength - 1);
       const stateWords = tokens(data.state);
       stateWords.slice(0, stateLimit).forEach((word) => add(word, "state"));
       add("[SEP]", "special");
 
-      const instructionTokens = plan.instructionLimit;
+      const instructionTokens = Math.max(instructionUsed, 1);
       const optionTokens = optionTexts.reduce(
         (sum, words, index) => sum + Math.min(words.length, plan.optionLimits[index]),
         0
@@ -436,7 +444,7 @@
       });
 
       caption.textContent =
-        `${count} options · ${plan.instructionLimit} instruction tokens · ` +
+        `${count} options · ${instructionUsed} instruction tokens · ` +
         `${plan.optionLimits[0]} to ${plan.optionLimits[count - 1]} tokens per option · ` +
         `state keeps ${stateLimit}. Options yield their share before the instruction drops below ` +
         `${SEQ.minInstructionTokens}. Token counts are word approximations here; the builder uses the encoder tokenizer.`;
@@ -478,7 +486,15 @@
     let step = 0;
     let drawn = null;
 
-    const sigma = () => Math.max(0.15, 0.6 * Math.pow(0.85, step));
+    // Same shape as the library: sigma_for anneals linearly from start to end,
+    // here over a fixed demo horizon instead of over an epoch count.
+    const sigmaStart = 0.6;
+    const sigmaEnd = 0.15;
+    const sigmaSteps = 40;
+    const sigma = () => {
+      const progress = Math.min(1, step / sigmaSteps);
+      return Math.max(sigmaEnd, sigmaStart + (sigmaEnd - sigmaStart) * progress);
+    };
 
     const renderLogits = () => {
       const probabilities = softmax(logits);
