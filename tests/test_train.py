@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from helpers import FIXTURES, SMOKE, tiny_encoder, tiny_tokenizer
 
 from exu.checkpoint import load_checkpoint, load_tokenizer
-from exu.train import build_parser, main
+from exu.train import _group_scale, build_parser, main
 
 
 def _encoder_dir(tmp_path):
@@ -128,3 +129,51 @@ def test_train_validates_numeric_arguments() -> None:
                 "0",
             ]
         )
+
+
+def test_log_every_accepts_zero_and_rejects_negatives() -> None:
+    """The help text promises that 0 disables logging, so 0 has to parse."""
+    import pytest
+
+    parser = build_parser()
+    base = ["--train", "t", "--validation", "v", "--output", "o"]
+
+    assert parser.parse_args(base + ["--log-every", "0"]).log_every == 0
+    assert parser.parse_args(base + ["--log-every", "5"]).log_every == 5
+    with pytest.raises(SystemExit):
+        parser.parse_args(base + ["--log-every", "-1"])
+
+
+def test_a_trailing_accumulation_group_keeps_its_weight() -> None:
+    """Regression: the last group of an epoch was divided by the full grad_accum."""
+    assert _group_scale(4, 10) == 0.25
+    assert _group_scale(4, 4) == 0.25
+    assert _group_scale(4, 1) == 1.0
+
+
+def test_sigma_reaches_sigma_end_on_the_last_update(tmp_path) -> None:
+    """Regression: the span was total_steps, so the anneal stopped one step short."""
+    encoder = _encoder_dir(tmp_path)
+    output = tmp_path / "anneal"
+
+    code = main(
+        _common(tmp_path, encoder, output)
+        + [
+            "--mode",
+            "rlcd",
+            "--epochs",
+            "2",
+            "--grad-accum",
+            "3",
+            "--samples-per-question",
+            "2",
+            "--sigma-start",
+            "0.8",
+            "--sigma-end",
+            "0.2",
+        ]
+    )
+
+    assert code == 0
+    summary = json.loads((output / "training.json").read_text(encoding="utf-8"))
+    assert summary["train_epochs"][-1]["sigma_end"] == pytest.approx(0.2)

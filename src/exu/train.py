@@ -4,7 +4,7 @@ Two modes share one pipeline:
 
 - ``baseline``: direct optimization of the strictly proper composite score. Fast,
   stable, and the bar the RLCD mode has to beat.
-- ``exu``: perturbed-logit policy gradient with the same score as reward.
+- ``rlcd``: perturbed-logit policy gradient with the same score as reward.
 
 After training, ``--calibrate`` fits temperatures on a held-out split (the
 calibration split if given, validation otherwise) and reports the ECE before and
@@ -96,7 +96,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--calibrate", action="store_true", help="fit temperatures after training")
     parser.add_argument("--calibration-min-samples", type=_positive_int, default=64)
-    parser.add_argument("--log-every", type=_positive_int, default=0, help="0 disables step logs")
+    parser.add_argument(
+        "--log-every",
+        type=_non_negative_int,
+        default=0,
+        help="0 disables step logs",
+    )
     return parser
 
 
@@ -279,6 +284,11 @@ def _train_epoch(
 
     for index, batch in enumerate(loader):
         moved = batch.to(device)
+        # A group that runs past the end of the epoch has fewer micro-batches than
+        # `grad_accum`, so scale by the group that actually exists. Dividing every
+        # micro-batch by `grad_accum` would shrink the last group's contribution.
+        if pending == 0:
+            group_scale = _group_scale(args.grad_accum, len(loader) - index)
         with autocast_context(device):
             output = model(**moved.model_inputs())
             if policy is None:
@@ -291,9 +301,11 @@ def _train_epoch(
                     rps_weight=args.rps_weight,
                 )
             else:
-                sigma = sigma_for(
-                    min(step, total_steps), total_steps, args.sigma_start, args.sigma_end
-                )
+                # `step` counts completed updates, so the last one is total_steps - 1.
+                # The schedule spans that index; using total_steps would stop one
+                # step short of sigma_end forever.
+                span = max(total_steps - 1, 1)
+                sigma = sigma_for(min(step, span), span, args.sigma_start, args.sigma_end)
                 loss, metrics = policy_gradient_loss(
                     output.logits,
                     moved.targets,
@@ -307,7 +319,7 @@ def _train_epoch(
                 cross_entropies.append(metrics.cross_entropy)
                 rewards.append(metrics.mean_reward)
                 advantages.append(metrics.mean_advantage)
-        (loss / args.grad_accum).backward()
+        (loss * group_scale).backward()
         losses.append(float(loss.detach().item()))
         pending += 1
         if pending >= args.grad_accum:
@@ -368,6 +380,23 @@ def _set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def _group_scale(grad_accum: int, remaining: int) -> float:
+    """The weight that makes every accumulation group count the same.
+
+    A group at the end of an epoch can hold fewer micro-batches than
+    ``grad_accum``. Scaling by the group that actually exists keeps its gradient
+    from being shrunk, which otherwise underweights the last step of every epoch.
+    """
+    return 1.0 / min(grad_accum, remaining)
+
+
+def _non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("cannot be negative")
+    return parsed
 
 
 def _positive_int(value: str) -> int:
