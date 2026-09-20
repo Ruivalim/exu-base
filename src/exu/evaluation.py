@@ -104,18 +104,21 @@ def metrics_for(collected: Collected, temperature: TemperatureMap) -> DecisionMe
 def grouped_metrics(
     collected: Collected, temperature: TemperatureMap, group: str = "kind"
 ) -> dict[str, DecisionMetrics]:
-    """Metrics per question kind or per task family, skipping empty groups."""
+    """Metrics per question kind or per task family.
+
+    Rows without a label for the grouping field are skipped, not fatal: `family`
+    is optional in the data contract, so one record without it must not erase the
+    report for every family that does have one.
+    """
     if group == "kind":
         keys: Sequence[str | None] = collected.question_kinds
     elif group == "family":
         keys = collected.families
     else:
         raise ValueError("group must be 'kind' or 'family'")
-    if any(key is None for key in keys):
-        return {}
     result: dict[str, DecisionMetrics] = {}
-    for key in sorted({str(value) for value in keys}):
-        index = torch.tensor([str(value) == key for value in keys], dtype=torch.bool)
+    for key in sorted({value for value in keys if value is not None}):
+        index = torch.tensor([value == key for value in keys], dtype=torch.bool)
         if not bool(index.any()):
             continue
         probabilities = collected.probabilities(temperature)

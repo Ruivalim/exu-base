@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from helpers import tiny_dataset, tiny_model, tiny_tokenizer
+from dataclasses import replace
+
+from helpers import smoke_examples, tiny_dataset, tiny_model, tiny_tokenizer
 from torch.utils.data import DataLoader
 
-from exu import TemperatureMap
+from exu import DecisionDataset, TemperatureMap
 from exu.evaluation import (
     collect,
     grouped_metrics,
@@ -53,6 +55,26 @@ def test_grouped_metrics_cover_every_kind_and_family() -> None:
     assert set(by_kind) == {"choice", "noul", "score"}
     assert set(by_family) == {"access", "payment", "risk", "routing", "urgency"}
     assert sum(item.count for item in by_kind.values()) == 24
+
+
+def test_one_record_without_a_family_keeps_the_other_families() -> None:
+    """Regression: a single `family`-less record emptied the family report.
+
+    `family` is optional in the data contract, so a dataset with one unlabeled
+    record is valid, and it used to return `{}` for every family.
+    """
+    builder = SequenceBuilder(tiny_tokenizer())
+    examples = list(smoke_examples())
+    expected = {example.family for example in examples if example.family is not None}
+    examples[0] = replace(examples[0], family=None)
+    dataset = DecisionDataset(examples, builder)
+    loader = DataLoader(dataset, batch_size=6, shuffle=False, collate_fn=dataset.collate)
+
+    collected = collect(tiny_model(), loader, "cpu")
+    by_family = grouped_metrics(collected, TemperatureMap(), "family")
+
+    assert set(by_family) == expected
+    assert sum(item.count for item in by_family.values()) == len(examples) - 1
 
 
 def test_order_robustness_reports_a_stability_in_range() -> None:
