@@ -7,7 +7,9 @@ import torch
 
 from exu.model import masked_log_softmax
 from exu.scoring import (
+    CONFIDENT_MISS,
     composite_score,
+    confident_misses,
     log_score,
     proper_scoring_loss,
     ranked_probability_score,
@@ -203,3 +205,35 @@ def test_score_shapes_are_validated() -> None:
         composite_score(torch.zeros(1, 3), target, mask)
     with pytest.raises(ValueError, match="one value per row"):
         composite_score(target.log(), target, mask, torch.tensor([True, False]))
+
+
+def test_confident_misses_count_claimed_mass_the_model_nearly_ruled_out() -> None:
+    # The threshold is the old log floor: below it the clamped reward was flat, so
+    # this counts exactly the predictions the floor used to act on.
+    mask = torch.ones(3, 2, dtype=torch.bool)
+    logits = torch.tensor([[0.0, 12.0], [0.0, 12.0], [0.0, 3.0]])
+    target = torch.tensor([[1.0, 0.0], [0.5, 0.5], [1.0, 0.0]])
+
+    missed, claimed = confident_misses(masked_log_softmax(logits, mask), target)
+
+    assert CONFIDENT_MISS == 1e-4
+    assert (int(missed), int(claimed)) == (2, 4)
+
+
+def test_confident_misses_ignore_what_the_target_does_not_claim() -> None:
+    # A padded option, or one the target gives no mass to, is not a miss however
+    # small its probability.
+    log_probabilities = torch.tensor([[-50.0, 0.0, -math.inf]])
+    target = torch.tensor([[0.0, 1.0, 0.0]])
+
+    missed, claimed = confident_misses(log_probabilities, target)
+
+    assert (int(missed), int(claimed)) == (0, 1)
+
+
+def test_the_confident_miss_threshold_is_strict() -> None:
+    at_threshold = torch.tensor([[math.log(CONFIDENT_MISS), math.log(1 - CONFIDENT_MISS)]])
+    target = torch.tensor([[1.0, 0.0]])
+
+    assert int(confident_misses(at_threshold, target)[0]) == 0
+    assert int(confident_misses(at_threshold - 1e-3, target)[0]) == 1

@@ -34,7 +34,7 @@ from .devices import autocast_context, resolve_device
 from .evaluation import collect, metrics_for
 from .model import SCORERS, ExuConfig, ExuModel, masked_log_softmax
 from .policy import PolicyConfig, policy_gradient_loss, sigma_for
-from .scoring import proper_scoring_loss, reward_definition
+from .scoring import CONFIDENT_MISS, confident_misses, proper_scoring_loss, reward_definition
 from .sequence import SequenceBuilder, SequenceConfig
 
 _DEFAULT_POLICY = PolicyConfig()
@@ -123,6 +123,10 @@ class EpochStats:
     mean_reward: float | None = None
     mean_advantage: float | None = None
     sigma_end: float | None = None
+    # Share of claimed components the model gave less than CONFIDENT_MISS to, at
+    # its own predictions, and over the sampled candidates in rlcd mode.
+    confident_miss_rate: float = 0.0
+    candidate_confident_miss_rate: float | None = None
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -260,6 +264,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "grad_accum": args.grad_accum,
         "option_shuffle": args.option_shuffle,
         "reward": reward_definition(args.spherical_weight, args.rps_weight),
+        "confident_miss_threshold": CONFIDENT_MISS,
         "policy": asdict(policy) if policy else None,
         "train_epochs": [asdict(item) for item in history],
         "validation": asdict(validation),
@@ -292,6 +297,7 @@ def _train_epoch(
     rewards: list[float] = []
     advantages: list[float] = []
     last_sigma: float | None = None
+    missed = claimed = candidate_missed = candidate_claimed = 0
 
     for index, batch in enumerate(loader):
         moved = batch.to(device)
@@ -303,8 +309,12 @@ def _train_epoch(
         with autocast_context(device):
             output = model(**moved.model_inputs())
             if policy is None:
+                log_probabilities = masked_log_softmax(output.logits, moved.option_mask)
+                with torch.no_grad():
+                    counts = torch.stack(confident_misses(log_probabilities, moved.targets))
+                missed, claimed = missed + counts[0], claimed + counts[1]
                 loss = proper_scoring_loss(
-                    masked_log_softmax(output.logits, moved.option_mask),
+                    log_probabilities,
                     moved.targets,
                     moved.option_mask,
                     moved.ordinal_mask,
@@ -330,6 +340,10 @@ def _train_epoch(
                 cross_entropies.append(metrics.cross_entropy)
                 rewards.append(metrics.mean_reward)
                 advantages.append(metrics.mean_advantage)
+                missed += metrics.confident_misses
+                claimed += metrics.claimed_components
+                candidate_missed += metrics.candidate_confident_misses
+                candidate_claimed += metrics.candidate_components
         (loss * group_scale).backward()
         losses.append(float(loss.detach().item()))
         pending += 1
@@ -351,6 +365,10 @@ def _train_epoch(
         mean_reward=sum(rewards) / len(rewards) if rewards else None,
         mean_advantage=sum(advantages) / len(advantages) if advantages else None,
         sigma_end=last_sigma,
+        confident_miss_rate=float(missed) / max(float(claimed), 1.0),
+        candidate_confident_miss_rate=(
+            candidate_missed / candidate_claimed if candidate_claimed else None
+        ),
     )
     return stats, step
 

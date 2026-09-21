@@ -245,3 +245,29 @@ def test_the_policy_loss_ignores_padded_options_under_half_precision_sentinels()
     assert math.isfinite(metrics.loss)
     assert torch.isfinite(logits.grad).all()
     assert logits.grad[0, 2].item() == 0
+
+
+def test_the_policy_step_counts_confident_misses_at_the_centre_and_in_the_candidates() -> None:
+    # One row in eight is wrong by a logit gap of 50. At the centre that is one
+    # missed component of eight. Every perturbed candidate of that row misses too,
+    # and no candidate of the other rows does: sigma 0.4 cannot cross a gap of 9.
+    logits, target, mask = _batch_with_a_confident_miss(50.0)
+
+    _loss, metrics = policy_gradient_loss(
+        logits, target, mask, sigma=0.4, generator=torch.Generator().manual_seed(3)
+    )
+
+    assert (metrics.confident_misses, metrics.claimed_components) == (1, 8)
+    assert (metrics.candidate_confident_misses, metrics.candidate_components) == (4, 32)
+
+
+def test_the_centre_is_counted_even_without_the_cross_entropy_term() -> None:
+    logits, target, mask = _batch_with_a_confident_miss(50.0)
+    config = PolicyConfig(cross_entropy_weight=0.0, samples_per_question=8)
+
+    _loss, metrics = policy_gradient_loss(
+        logits, target, mask, config=config, sigma=1.0, generator=torch.Generator().manual_seed(3)
+    )
+
+    assert metrics.cross_entropy == 0.0
+    assert (metrics.confident_misses, metrics.claimed_components) == (1, 8)

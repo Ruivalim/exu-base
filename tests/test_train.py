@@ -57,6 +57,10 @@ def test_baseline_mode_writes_a_reloadable_checkpoint(tmp_path) -> None:
     assert len(summary["train_epochs"]) == 1
     assert summary["validation"]["count"] == 4
     assert summary["policy"] is None
+    assert summary["confident_miss_threshold"] == 1e-4
+    (epoch,) = summary["train_epochs"]
+    assert 0.0 <= epoch["confident_miss_rate"] <= 1.0
+    assert epoch["candidate_confident_miss_rate"] is None
     assert summary["reward"] == {
         "version": 1,
         "log_term": "log_softmax",
@@ -97,6 +101,9 @@ def test_rlcd_mode_trains_calibrates_and_shuffles(tmp_path) -> None:
     assert summary["option_shuffle"] is True
     assert summary["policy"]["samples_per_question"] == 4
     assert "log_floor" not in summary["policy"]
+    for epoch in summary["train_epochs"]:
+        assert 0.0 <= epoch["confident_miss_rate"] <= 1.0
+        assert 0.0 <= epoch["candidate_confident_miss_rate"] <= 1.0
     assert summary["reward"]["log_term"] == "log_softmax"
     assert summary["reward"]["spherical_weight"] == summary["policy"]["spherical_weight"]
     assert all(epoch["mean_reward"] is not None for epoch in summary["train_epochs"])

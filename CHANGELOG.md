@@ -44,6 +44,10 @@ implements is RLCD, and that name belongs to TypeSafe.
   balanced BoolQ at exactly `log 2`). `marker-cls` breaks the symmetry by
   construction (0.75 and 0.66 there). Stored in the checkpoint, default unchanged,
   older checkpoints load as `marker`.
+- `training.json` reports `confident_miss_rate` per epoch, and
+  `candidate_confident_miss_rate` in `rlcd` mode: how often the model gave less than
+  `1e-4` to something the target claims. It is the threshold the log floor used to
+  have, so how often that floor acted is now a measurement.
 - Offline inference runtime with batched decisions and two documented confidence
   scales.
 - `exu-decide`: the runtime from the command line. One question written with

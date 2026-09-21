@@ -43,7 +43,7 @@ import torch
 from torch import Tensor
 
 from .model import masked_log_softmax
-from .scoring import composite_score, log_score
+from .scoring import composite_score, confident_misses, log_score
 
 _ADVANTAGE_MODES = ("batch", "group", "none")
 
@@ -98,6 +98,13 @@ class PolicyMetrics:
     mean_reward: float
     mean_advantage: float
     sigma: float
+    # Claimed components given less than `scoring.CONFIDENT_MISS`, and how many
+    # claimed components there were: at the unperturbed logits, and over every
+    # sampled candidate.
+    confident_misses: int = 0
+    claimed_components: int = 0
+    candidate_confident_misses: int = 0
+    candidate_components: int = 0
 
 
 def sigma_for(step: int, total_steps: int, start: float, end: float) -> float:
@@ -221,10 +228,16 @@ def policy_gradient_loss(
     log_probability = gaussian_log_prob(sampled, logits, sigma, mask)
     policy_loss = -(advantages.detach() * log_probability).mean()
 
+    centre = masked_log_softmax(logits, mask)
     cross_entropy = torch.zeros((), dtype=logits.dtype, device=logits.device)
     if settings.cross_entropy_weight > 0:
-        cross_entropy = -log_score(masked_log_softmax(logits, mask), target).mean()
+        cross_entropy = -log_score(centre, target).mean()
     loss = policy_loss + settings.cross_entropy_weight * cross_entropy
+
+    with torch.no_grad():
+        counts = torch.stack(
+            [*confident_misses(centre, target), *confident_misses(flat_candidates, flat_target)]
+        ).tolist()
 
     metrics = PolicyMetrics(
         loss=float(loss.detach().item()),
@@ -233,5 +246,9 @@ def policy_gradient_loss(
         mean_reward=float(rewards.detach().mean().item()),
         mean_advantage=float(advantages.detach().mean().item()),
         sigma=float(sigma),
+        confident_misses=int(counts[0]),
+        claimed_components=int(counts[1]),
+        candidate_confident_misses=int(counts[2]),
+        candidate_components=int(counts[3]),
     )
     return loss, metrics

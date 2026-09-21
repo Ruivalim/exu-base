@@ -181,6 +181,13 @@ O que olhar:
   mais `rps` e `ordinal_mae` em perguntas `score`. São os números para comparar
   com a rodada do baseline.
 - `train_epochs[*].mean_reward`: deve subir, ou pelo menos não desabar.
+- `train_epochs[*].confident_miss_rate`: a fração dos componentes reivindicados pelo
+  alvo a que o modelo deu menos de `1e-4`, nas próprias previsões.
+  `candidate_confident_miss_rate` é a mesma coisa sobre as candidatas amostradas, só
+  no modo `rlcd`. Com rótulo hard, componente é linha. Uma taxa que não cai de uma
+  época para outra aponta para linha com rótulo errado ou para um modelo que não
+  consegue se recuperar. Com `--advantage-norm batch`, cada linha dessas também
+  atrasa o resto do batch dela.
 - `calibration.fits`: uma entrada por bucket, com `samples`, `nll_before`,
   `nll_after`, `fallback` e `at_bound`. Um ajuste com `at_bound: true` significa
   que a temperatura encostou no limite do clamp. Isso é sinal para olhar, nunca

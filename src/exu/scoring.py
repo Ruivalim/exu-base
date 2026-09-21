@@ -26,6 +26,8 @@ Three rules are combined here:
 
 from __future__ import annotations
 
+import math
+
 import torch
 from torch import Tensor
 
@@ -51,6 +53,12 @@ def validate_distributions(probabilities: Tensor, target: Tensor, option_mask: T
         raise ValueError("predicted probabilities must sum to one")
 
 
+# The probability below which a prediction counts as a confident miss. It is the
+# value the log floor used to have: below it the clamped reward was flat, so this
+# counts exactly the predictions that floor acted on. Training reports the rate, so
+# "the floor almost never fired" is a measurement and not a guess.
+CONFIDENT_MISS = 1e-4
+
 # Bump when the definition of the reward changes. `training.json` records it, so
 # two runs are only compared when they optimized the same thing.
 REWARD_VERSION = 1
@@ -65,6 +73,19 @@ def reward_definition(spherical_weight: float = 0.75, rps_weight: float = 1.0) -
         "spherical_weight": spherical_weight,
         "rps_weight": rps_weight,
     }
+
+
+def confident_misses(log_probabilities: Tensor, target: Tensor) -> tuple[Tensor, Tensor]:
+    """Count claimed components the model nearly ruled out, and all claimed ones.
+
+    A component is claimed when the target gives it mass. Only those can be missed:
+    a padded option, or one the target leaves at zero, is not a miss however small
+    its probability. With hard labels a component is a row. Returns two scalar
+    tensors, so a training loop can add them up without a device sync per step.
+    """
+    claimed = target > 0
+    missed = claimed & (log_probabilities < math.log(CONFIDENT_MISS))
+    return missed.sum(), claimed.sum()
 
 
 def log_score(log_probabilities: Tensor, target: Tensor) -> Tensor:

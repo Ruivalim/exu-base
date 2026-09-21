@@ -178,6 +178,12 @@ What to look at:
   plus `rps` and `ordinal_mae` for `score` questions. These are the numbers to
   compare against the baseline run.
 - `train_epochs[*].mean_reward`: should rise, or at least not fall apart.
+- `train_epochs[*].confident_miss_rate`: the share of claimed target components the
+  model gave less than `1e-4` to, at its own predictions. `candidate_confident_miss_rate`
+  is the same over the sampled candidates, in `rlcd` mode only. With hard labels a
+  component is a row. A rate that does not fall across epochs points at mislabeled
+  rows or at a model that cannot recover. In `--advantage-norm batch` every such row
+  also slows the rest of its batch.
 - `calibration.fits`: one entry per bucket, with `samples`, `nll_before`,
   `nll_after`, `fallback` and `at_bound`. A fit with `at_bound: true` means the
   temperature landed on the clamp limit. That is a signal to look at, never a
