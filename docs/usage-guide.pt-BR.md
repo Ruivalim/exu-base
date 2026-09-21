@@ -241,6 +241,51 @@ print(decision.label, decision.probabilities, decision.confidence, decision.shou
   uma das duas.
 - `decision.expected_level` só faz sentido em perguntas `score`.
 
+### Pela linha de comando
+
+O `exu-decide` é o mesmo runtime atrás de um CLI. Uma pergunta, escrita com flags:
+
+```bash
+exu-decide --checkpoint artifacts/exu \
+  --state "Fui cobrado duas vezes pela mesma fatura." \
+  --instruction "Para onde vai este ticket?" \
+  --option "cobrança=pagamento, fatura ou reembolso" \
+  --option "suporte=acesso ou indisponibilidade"
+```
+
+`--option NOME[=DESCRIÇÃO]` se repete, e só o primeiro `=` separa os dois.
+`--kind score` recebe `--level TEXTO`, do menor para o maior, e `--kind noul`
+responde `No` ou `Yes`, a menos que `--false-option` e `--true-option` digam outra
+coisa. `--state-file` lê o estado de um arquivo.
+
+Muitas perguntas, um registro JSON por linha, de um arquivo ou do stdin com `-`:
+
+```bash
+exu-decide --checkpoint artifacts/exu --input perguntas.jsonl --output decisoes.jsonl
+```
+
+O registro precisa de `state` e `question`, no formato do dataset. O `id` é
+devolvido quando existe e o resto é ignorado, então um arquivo de dataset funciona
+como está. A saída é um objeto JSON por pergunta, na ordem da entrada, com `label`,
+`confidence`, `entropy_confidence`, `should_act`, `expected_level`, e
+`probabilities` e `logits` indexados pelo nome da opção.
+
+`--top-only` devolve só a vencedora: `{"label": "cobrança", "confidence": 0.87}`,
+mais o `id` quando existe. `--metrics` acrescenta um objeto `metrics` a cada
+resposta (`batch_ms`, `batch_size`, `per_question_ms`) e imprime uma linha JSON de
+resumo no stderr (`questions`, `batches`, `load_ms`, `inference_ms`,
+`first_batch_ms`, `questions_per_second`), então o stdout continua com um esquema
+só. O tempo cobre a resposta inteira: montar as sequências, o forward e ler o
+resultado de volta. O primeiro lote numa GPU também paga o aquecimento, por isso
+sai à parte. Uma pergunta não tem latência própria dentro de um lote, então
+`per_question_ms` é o tempo do lote dividido pelo tamanho dele.
+
+A entrada inteira é validada antes do primeiro forward. Linha quebrada é nomeada
+(`error: line 7: missing field 'question'`), o código de saída é 1 e nada é
+respondido, então um pipeline nunca recebe meio resultado. Linha de comando
+malformada sai com 2. Toda chamada carrega o checkpoint, o que custa segundos: um
+serviço deve manter um `DecisionRuntime` residente.
+
 O formato do checkpoint, a validação feita antes de carregar e as regras de
 dispositivo e precisão estão em [checkpoints.md](checkpoints.md).
 

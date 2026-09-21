@@ -7,7 +7,8 @@ options, then:
    ``sigma``; mask them to the valid options and project them to sum to zero,
    because adding a constant to logits does not change the softmax and that
    degree of freedom would only add variance;
-2. softmax each perturbed version: ``G`` candidate distributions per question;
+2. log-softmax each perturbed version: ``G`` candidate distributions per question,
+   kept in log space so a confident miss keeps its real price;
 3. score every candidate against the target with a strictly proper scoring rule,
    with no gradient;
 4. advantage: reward minus the group baseline, normalized by a standard
@@ -41,8 +42,8 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from .model import masked_softmax
-from .scoring import composite_score
+from .model import masked_log_softmax
+from .scoring import composite_score, log_score
 
 _ADVANTAGE_MODES = ("batch", "group", "none")
 
@@ -57,7 +58,6 @@ class PolicyConfig:
     cross_entropy_weight: float = 1.0
     spherical_weight: float = 0.75
     rps_weight: float = 1.0
-    log_floor: float = 1e-4
     advantage_norm: str = "batch"
 
     def __post_init__(self) -> None:
@@ -197,13 +197,12 @@ def policy_gradient_loss(
     sampled = (logits.detach().unsqueeze(1) + sigma * noise).masked_fill(
         ~mask.unsqueeze(1), torch.finfo(logits.dtype).min
     )
-    candidates = torch.softmax(sampled, dim=-1).masked_fill(~mask.unsqueeze(1), 0.0)
 
-    flat_candidates = candidates.reshape(batch * samples, options)
     flat_target = (
         target.unsqueeze(1).expand(batch, samples, options).reshape(batch * samples, options)
     )
     flat_mask = mask.unsqueeze(1).expand(batch, samples, options).reshape(batch * samples, options)
+    flat_candidates = masked_log_softmax(sampled.reshape(batch * samples, options), flat_mask)
     flat_ordinal = (
         None
         if ordinal_mask is None
@@ -216,7 +215,6 @@ def policy_gradient_loss(
         flat_ordinal,
         spherical_weight=settings.spherical_weight,
         rps_weight=settings.rps_weight,
-        log_floor=settings.log_floor,
     ).reshape(batch, samples)
 
     advantages = group_advantages(rewards.detach(), settings.advantage_norm)
@@ -225,10 +223,7 @@ def policy_gradient_loss(
 
     cross_entropy = torch.zeros((), dtype=logits.dtype, device=logits.device)
     if settings.cross_entropy_weight > 0:
-        probabilities = masked_softmax(logits, mask)
-        cross_entropy = (
-            -(target * probabilities.clamp_min(settings.log_floor).log()).sum(dim=-1).mean()
-        )
+        cross_entropy = -log_score(masked_log_softmax(logits, mask), target).mean()
     loss = policy_loss + settings.cross_entropy_weight * cross_entropy
 
     metrics = PolicyMetrics(

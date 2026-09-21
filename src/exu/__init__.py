@@ -31,13 +31,21 @@ from .checkpoint import Checkpoint, load_checkpoint, load_tokenizer, save_checkp
 from .data import DecisionDataset, TrainingBatch, TrainingExample, load_jsonl, write_jsonl
 from .metrics import (
     DecisionMetrics,
+    ReferencePrior,
     classification_metrics,
-    majority_class_baseline,
-    prior_baseline,
-    random_baseline,
+    fit_reference_prior,
+    prior_in_sample_baseline,
     selective_coverage,
+    uniform_baseline,
 )
-from .model import ActionCosts, DecisionOutput, ExuConfig, ExuModel, masked_softmax
+from .model import (
+    ActionCosts,
+    DecisionOutput,
+    ExuConfig,
+    ExuModel,
+    masked_log_softmax,
+    masked_softmax,
+)
 from .policy import (
     PolicyConfig,
     PolicyMetrics,
@@ -70,6 +78,7 @@ __all__ = [
     "Option",
     "PolicyConfig",
     "PolicyMetrics",
+    "ReferencePrior",
     "ExuConfig",
     "ExuModel",
     "SequenceBuilder",
@@ -81,23 +90,24 @@ __all__ = [
     "classification_metrics",
     "composite_score",
     "fit_temperature",
+    "fit_reference_prior",
     "fit_temperature_map",
     "group_advantages",
     "load_checkpoint",
     "load_jsonl",
     "load_tokenizer",
     "log_score",
-    "majority_class_baseline",
+    "masked_log_softmax",
     "masked_softmax",
     "policy_gradient_loss",
     "proper_scoring_loss",
-    "prior_baseline",
-    "random_baseline",
+    "prior_in_sample_baseline",
     "ranked_probability_score",
     "save_checkpoint",
     "selective_coverage",
     "sigma_for",
     "spherical_score",
+    "uniform_baseline",
     "write_jsonl",
 ]
 

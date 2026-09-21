@@ -49,6 +49,7 @@ src/exu/          the package, all of it (there is no second source tree)
   evaluation.py    evaluation passes: per-kind, per-family, coverage, order robustness
   evaluate.py      the `exu-evaluate` CLI
   train.py         the `exu-train` CLI
+  decide.py        the `exu-decide` CLI: one question from flags, or a JSONL batch
   checkpoint.py    save and load, with validation before loading
   runtime.py       DecisionRuntime: load once, decide, batched
   devices.py       device and dtype selection
@@ -107,6 +108,9 @@ touches them, say so explicitly instead of folding it into a small diff.
    fitted value sitting on a bound is a signal to look at, not a result to ship.
 8. **A metric without its trivial baselines says nothing.** Uniform, the
    per-question prior and the majority class are reported next to every number.
+   A baseline never reads the labels it is scored against: the prior and the
+   majority class are fitted on reference rows, and mutating the evaluation
+   targets must leave their predictions unchanged.
 
 ## Documentation
 

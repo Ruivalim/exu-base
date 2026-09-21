@@ -60,6 +60,34 @@ def masked_softmax(
     return probabilities.masked_fill(~mask, 0.0)
 
 
+def masked_log_softmax(
+    logits: Tensor, option_mask: Tensor, temperature: float | Tensor = 1.0
+) -> Tensor:
+    """Log-probabilities over valid options only, in float32, zero on padded ones.
+
+    The log score is computed from these and never from ``log(masked_softmax(z))``.
+    Softmax underflows to an exact zero on a confident miss, and the log of that is
+    infinite unless it is clamped. A clamp makes the reward improper below it and
+    switches off the gradient of exactly the rows that most need one.
+
+    The upcast happens here instead of being left to the caller's autocast
+    context, because half precision cannot hold a confident miss. Padded positions
+    come back as zero, not ``-inf``, so ``target * log_probabilities`` never meets
+    ``0 * -inf``. A non-finite logit on a valid option is a bug upstream and is not
+    hidden: it comes back non-finite.
+    """
+    mask = option_mask.bool()
+    if not bool(mask.any(dim=-1).all()):
+        raise ValueError("every row needs at least one valid option")
+    safe = logits.float().masked_fill(~mask, 0.0)
+    if isinstance(temperature, Tensor):
+        scaled = safe / temperature.reshape(-1, 1)
+    else:
+        scaled = safe / temperature
+    scaled = scaled.masked_fill(~mask, float("-inf"))
+    return torch.log_softmax(scaled, dim=-1).masked_fill(~mask, 0.0)
+
+
 @dataclass(frozen=True, slots=True)
 class ActionCosts:
     """Cost matrix for act-or-escalate, expressed as a business rule.

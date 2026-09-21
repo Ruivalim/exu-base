@@ -1,20 +1,21 @@
 /* Exu explainer interactions.
    Every number on the page comes from the same math the Python package uses:
-   log score with a 1e-4 floor, spherical score, the composite reward, and the
+   log score with no floor, spherical score, the composite reward, and the
    score-function policy update. No backend, no build step, no dependencies. */
 
 (() => {
   "use strict";
 
   const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
-  const LOG_FLOOR = 1e-4;
 
   /* ------------------------------------------------------------- score math */
 
+  /* Mass the target does not claim is skipped, so 0 * log(0) reads as 0 and not
+     as NaN. Python does the same in log space, see exu.scoring.log_score. */
   const logScore = (q, y) => {
     let total = 0;
     for (let i = 0; i < q.length; i += 1) {
-      total += y[i] * Math.log(Math.max(q[i], LOG_FLOOR));
+      if (y[i] > 0) total += y[i] * Math.log(q[i]);
     }
     return total;
   };

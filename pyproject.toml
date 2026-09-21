@@ -47,6 +47,7 @@ Changelog = "https://github.com/ruivalim/exu-base/blob/main/CHANGELOG.md"
 [project.scripts]
 exu-train = "exu.train:main"
 exu-evaluate = "exu.evaluate:main"
+exu-decide = "exu.decide:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/exu"]

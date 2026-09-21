@@ -71,20 +71,7 @@ class TrainingExample:
     @classmethod
     def from_record(cls, record: Mapping[str, Any]) -> TrainingExample:
         try:
-            raw_question = _mapping(record["question"], "question")
-            raw_options = _sequence(raw_question["options"], "question.options")
-            options = tuple(
-                Option(
-                    _string(_mapping(item, "question option")["name"], "question option name"),
-                    _optional_string(_mapping(item, "question option").get("description")),
-                )
-                for item in raw_options
-            )
-            question = DecisionQuestion(
-                DecisionType(_string(raw_question["kind"], "question kind")),
-                _string(raw_question["instruction"], "question instruction"),
-                options,
-            )
+            question = question_from_record(record["question"])
             raw_target = _sequence(record["target"], "target")
             target = tuple(float(value) for value in raw_target)
             return cls(
@@ -210,6 +197,29 @@ class DecisionDataset(Dataset[TrainingExample]):
         )
 
 
+def question_from_record(raw: Any) -> DecisionQuestion:
+    """Build the question of one record. Inference input shares it with training."""
+    raw_question = _mapping(raw, "question")
+    raw_options = _sequence(raw_question["options"], "question.options")
+    options = tuple(
+        Option(
+            _string(_mapping(item, "question option")["name"], "question option name"),
+            _optional_string(_mapping(item, "question option").get("description")),
+        )
+        for item in raw_options
+    )
+    return DecisionQuestion(
+        DecisionType(_string(raw_question["kind"], "question kind")),
+        _string(raw_question["instruction"], "question instruction"),
+        options,
+    )
+
+
+def state_text(value: Any) -> str:
+    """The text the model reads for a state given as a string, an object or a list."""
+    return _serialize_state(value)
+
+
 def load_jsonl(path: str | Path, split: str | None = None) -> list[TrainingExample]:
     """Read UTF-8 JSONL records, optionally selecting a declared split."""
     if split is not None and not split.strip():
@@ -233,7 +243,12 @@ def load_jsonl(path: str | Path, split: str | None = None) -> list[TrainingExamp
 
 
 def write_jsonl(path: str | Path, examples: Sequence[TrainingExample]) -> None:
-    """Write examples back out, preserving every declared field."""
+    """Write examples back out, one record per line.
+
+    Every declared field survives, with one documented exception: a string state
+    that looks like JSON is written as the structure it parses to, see
+    :func:`_parse_state`. The text the model reads is the same either way.
+    """
     stream = "\n".join(
         json.dumps(example.to_record(), ensure_ascii=False, sort_keys=True) for example in examples
     )

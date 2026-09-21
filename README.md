@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ruivalim/exu-base/actions/workflows/ci.yml/badge.svg)](https://github.com/ruivalim/exu-base/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/Ruivalim/exu-base/blob/main/LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/ruivalim/exu-base/blob/main/LICENSE)
 
 Train encoder-only decision models that answer with **probability distributions**
 instead of generated text. You give a state and a question with explicit options;
@@ -11,9 +11,12 @@ the model returns a distribution over those options in one forward pass.
 **Exu is a toolkit, not a method.** The training method it implements is RLCD,
 *Reinforcement Learning for Calibrated Decisions*, the name
 [TypeSafe AI](https://typesafe.ai/) gives to the recipe behind Jev, its System One
-model. The reward is a strictly proper scoring rule, so the only way to increase
-it is to report honest probabilities. Calibration is not coaxed out of the model
-with a prompt, it is the optimum of the objective.
+model. The reward is a strictly proper scoring rule: its expected score is
+uniquely maximized by the true distribution, and the direct baseline optimizes it
+as is. RLCD optimizes the same reward under logit perturbations, and propriety
+alone does not guarantee that its unperturbed predictions are calibrated, so
+compare the two on held-out data. Calibration is not coaxed out of the model with
+a prompt, it is what the objective asks for.
 
 The name honours Exu, the Orixá of the crossroads, of movement and of
 communication, who in Afro-Brazilian religions opens the paths and governs the
@@ -96,7 +99,7 @@ same strictly proper score directly, with no sampling. Train the baseline first:
 it is the bar the RLCD mode has to beat on held-out ECE or NLL.
 
 The step-by-step version, from writing the records to reading the report and the
-failure modes, is [docs/usage-guide.md](https://github.com/Ruivalim/exu-base/blob/main/docs/usage-guide.md).
+failure modes, is [docs/usage-guide.md](https://github.com/ruivalim/exu-base/blob/main/docs/usage-guide.md).
 
 ## Evaluate
 
@@ -119,6 +122,15 @@ from exu import DecisionRuntime
 runtime = DecisionRuntime.load("artifacts/my-model")
 decision = runtime.decide("I was charged twice for the same invoice.", route)
 print(decision.label, decision.confidence)  # billing 0.87
+```
+
+Or from a shell, one question with flags or a JSONL batch with `--input`:
+
+```bash
+exu-decide --checkpoint artifacts/my-model \
+  --state "I was charged twice for the same invoice." \
+  --instruction "Where should this ticket go?" \
+  --option "billing=payment, invoice or refund" --option "support=access or outage"
 ```
 
 ## Data
@@ -145,7 +157,7 @@ targets from several annotators or a teacher model are first-class.
 }
 ```
 
-See [docs/dataset-format.md](https://github.com/Ruivalim/exu-base/blob/main/docs/dataset-format.md)
+See [docs/dataset-format.md](https://github.com/ruivalim/exu-base/blob/main/docs/dataset-format.md)
 for the full field list and
 the rules that keep held-out honest.
 
@@ -159,8 +171,8 @@ strictly proper scoring rule. Then a temperature map, fitted on held-out data,
 brings confidence in line with accuracy.
 
 The full walkthrough is in
-[docs/exu-guide.md](https://github.com/Ruivalim/exu-base/blob/main/docs/exu-guide.md), and
-[docs/algorithm.md](https://github.com/Ruivalim/exu-base/blob/main/docs/algorithm.md) has the
+[docs/exu-guide.md](https://github.com/ruivalim/exu-base/blob/main/docs/exu-guide.md), and
+[docs/algorithm.md](https://github.com/ruivalim/exu-base/blob/main/docs/algorithm.md) has the
 reward and policy math.
 
 ## Development
@@ -186,6 +198,10 @@ act-or-escalate training (the cost-based baseline is in place), and a multi-turn
 prefix objective.
 
 Small synthetic fixtures are for plumbing only. They are not evidence of quality.
+
+Every run on real data so far, with datasets, encoders, seeds and the results that
+did not go RLCD's way, is in
+[BENCHMARKS.md](https://github.com/ruivalim/exu-base/blob/main/BENCHMARKS.md).
 
 ## Prior art
 
@@ -217,7 +233,7 @@ repository implements it.
 
 ## License
 
-Code under [MIT](https://github.com/Ruivalim/exu-base/blob/main/LICENSE). Datasets and
+Code under [MIT](https://github.com/ruivalim/exu-base/blob/main/LICENSE). Datasets and
 checkpoints carry their own licenses.
 Before publishing an artifact, confirm the encoder, tokenizer, data and resulting
 weights are compatible.

@@ -25,26 +25,49 @@ implements is RLCD, and that name belongs to TypeSafe.
   literal mask strings from all untrusted text.
 - `ExuModel`: bidirectional encoder, question-type embedding, two extra
   transformer layers, marker scorer and an act-or-escalate head.
-- Strictly proper scoring rules: log score with a floor, spherical score and
-  ranked probability score, plus the composite reward.
+- Strictly proper scoring rules: log score computed from `log_softmax` with no
+  floor, spherical score and ranked probability score, plus the composite reward.
 - Direct baseline training and RLCD training: perturbed-logit policy gradient
   with masked zero-sum noise, `G` candidates per question, GRPO-style advantage
   and a linearly annealed sigma, with an optional cross-entropy term.
 - Temperature calibration: per-type and per-(type, option count) buckets, fitted
   with LBFGS on held-out data, with min-sample fallback and bound detection.
 - Evaluation: NLL, Brier, accuracy, soft accuracy, ECE, ordinal RPS and MAE,
-  per-kind and per-family breakdowns, random/prior/majority baselines, selective
+  per-kind and per-family breakdowns, uniform/prior/majority baselines, selective
   coverage, order robustness and latency percentiles.
 - Portable checkpoint carrying model config, sequence config, temperature map,
   weights and tokenizer, with validated loading.
 - Offline inference runtime with batched decisions and two documented confidence
   scales.
+- `exu-decide`: the runtime from the command line. One question written with
+  flags, or a JSONL batch from a file or stdin, one JSON object per question. The
+  input is validated whole before anything is answered. `--top-only` keeps the
+  winning option and its probability, `--metrics` times every batch and prints a
+  summary to stderr.
 - Static explainer site with interactive scoring-rule and policy-gradient demos.
 
 ### Fixed
 
 Found by an external review before this first release, and fixed here:
 
+- The `prior` and `majority` baselines were fitted on the labels they were scored
+  against, so a question that occurred once got its own target as its prior: NLL
+  0 and accuracy 1, presented as the bar to clear. They are now fitted on
+  reference labels, the `train` split of `--data` by default or `--reference`,
+  with `(count + 1/K) / (n + 1)` smoothing that doubles as the fallback for an
+  unseen question. The report says where the prior came from and how many rows it
+  covered, and returns `null` instead of falling back to the evaluation labels.
+  `majority` reports accuracy only, and breaks ties on option identity. The old
+  quantity is kept as `prior_in_sample`, a diagnostic. A `choice` question now
+  matches in any option order. The report key `random` is now `uniform`.
+- The log score was clamped at `1e-4`, in the reward and in the auxiliary
+  cross-entropy. That made the reward improper for any component below about
+  `2.7e-4`, where reporting zero outscored the truth, and it left every confidently
+  wrong row with a gradient near zero in both training modes. The log term now
+  comes from `log_softmax` on all three paths, `log_floor` is gone from the API,
+  the scoring functions take log-probabilities, and `training.json` records the
+  reward definition in both modes. Numbers from earlier training runs have to be
+  rerun. The site's scoring mirror changed with it.
 - The header budget reserved each option's ceiling instead of its real length, so
   any question with four or more options pinned the instruction to its 8-token
   floor and left most of the header unused. The question was silently truncated.

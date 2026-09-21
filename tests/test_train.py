@@ -57,6 +57,12 @@ def test_baseline_mode_writes_a_reloadable_checkpoint(tmp_path) -> None:
     assert len(summary["train_epochs"]) == 1
     assert summary["validation"]["count"] == 4
     assert summary["policy"] is None
+    assert summary["reward"] == {
+        "version": 1,
+        "log_term": "log_softmax",
+        "spherical_weight": 0.75,
+        "rps_weight": 1.0,
+    }
     restored = load_checkpoint(output)
     assert restored.model_config.encoder_name == str(encoder)
     assert load_tokenizer(output).mask_token_id == tiny_tokenizer().mask_token_id
@@ -90,6 +96,9 @@ def test_rlcd_mode_trains_calibrates_and_shuffles(tmp_path) -> None:
     summary = json.loads((output / "training.json").read_text(encoding="utf-8"))
     assert summary["option_shuffle"] is True
     assert summary["policy"]["samples_per_question"] == 4
+    assert "log_floor" not in summary["policy"]
+    assert summary["reward"]["log_term"] == "log_softmax"
+    assert summary["reward"]["spherical_weight"] == summary["policy"]["spherical_weight"]
     assert all(epoch["mean_reward"] is not None for epoch in summary["train_epochs"])
     assert summary["calibration"]["source"].endswith("smoke.jsonl")
     assert summary["calibration"]["fits"]

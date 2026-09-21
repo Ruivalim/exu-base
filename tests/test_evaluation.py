@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import random
 from dataclasses import replace
 
+import pytest
+import torch
 from helpers import smoke_examples, tiny_dataset, tiny_model, tiny_tokenizer
 from torch.utils.data import DataLoader
 
-from exu import DecisionDataset, TemperatureMap
+from exu import DecisionDataset, TemperatureMap, evaluation
+from exu.augmentation import random_order
 from exu.evaluation import (
     collect,
     grouped_metrics,
@@ -77,15 +81,68 @@ def test_one_record_without_a_family_keeps_the_other_families() -> None:
     assert sum(item.count for item in by_family.values()) == len(examples) - 1
 
 
-def test_order_robustness_reports_a_stability_in_range() -> None:
+class _QuestionBuilder:
+    """Hands the question itself to the forward pass, so a stub can read its options."""
+
+    def build(self, state, question):
+        return question
+
+
+def _stub_forward(pick):
+    def forward(model, builder, encoded, temperatures, device, batch_size):
+        rows = []
+        for question in encoded:
+            row = torch.full((len(question.options),), 0.3 / max(len(question.options) - 1, 1))
+            row[pick(question)] = 0.7
+            rows.append(row)
+        return rows
+
+    return forward
+
+
+def test_order_robustness_is_one_for_a_model_that_reads_the_options(monkeypatch) -> None:
+    # This stub answers by option name, whatever the order. Any mistake in mapping a
+    # permuted answer back to the original positions makes the stability drop.
+    def by_name(question):
+        names = [option.name for option in question.options]
+        return names.index(min(names))
+
+    monkeypatch.setattr(evaluation, "_forward_probabilities", _stub_forward(by_name))
+    examples = smoke_examples()
+
+    report = order_robustness(None, _QuestionBuilder(), examples, TemperatureMap(), permutations=5)
+
+    assert report["examples"] == 24
+    assert report["permutations"] == 5
+    assert report["stability"] == 1.0
+    assert report["mean_winner_probability"] == pytest.approx(0.7)
+
+
+def test_order_robustness_catches_a_model_that_answers_by_position(monkeypatch) -> None:
+    # This stub always answers the first slot. It agrees with its unpermuted answer
+    # only when the permutation leaves the first option in place.
+    monkeypatch.setattr(evaluation, "_forward_probabilities", _stub_forward(lambda question: 0))
+    examples = smoke_examples()
+    generator = random.Random(17)
+    kept = [
+        random_order(example.option_count, generator)[0] == 0
+        for example in examples
+        for _ in range(5)
+    ]
+
+    report = order_robustness(None, _QuestionBuilder(), examples, TemperatureMap(), permutations=5)
+
+    assert report["stability"] == pytest.approx(sum(kept) / len(kept))
+    assert report["stability"] < 0.7
+
+
+def test_order_robustness_runs_on_the_real_model() -> None:
     builder, dataset, _loader, model = _setup()
 
     report = order_robustness(model, builder, dataset.examples, TemperatureMap(), permutations=3)
 
     assert report["examples"] == 24
     assert report["permutations"] == 3
-    assert 0.0 <= report["stability"] <= 1.0
-    assert 0.0 <= report["mean_winner_probability"] <= 1.0
 
 
 def test_latency_benchmark_reports_percentiles() -> None:

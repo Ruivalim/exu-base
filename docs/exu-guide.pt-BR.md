@@ -202,7 +202,8 @@ provável. RL ingênuo maximiza acurácia e destrói calibração.
 A recompensa composta aqui soma três peças:
 
 - log score: o log da probabilidade dada ao alvo (soma ponderada, com alvo soft).
-  Pune quem dá pouca probabilidade ao que aconteceu. Um piso limita a punição.
+  Pune quem dá pouca probabilidade ao que aconteceu. É calculado em espaço de log e não tem piso, então um erro confiante mantém o
+  preço real e continua ensinando.
 - score esférico: o produto interno entre alvo e `q` dividido pela norma de `q`,
   entre 0 e 1. Premia massa no lugar certo sem os picos de gradiente do log.
 - ranked probability score, só em perguntas `score`: distância quadrática entre as
@@ -241,7 +242,7 @@ estimar, com ruído, o gradiente de uma versão suavizada do mesmo objetivo, mai
 os termos esférico e RPS. A afirmação de que cross-entropy deixa o modelo
 confiante demais e a scoring rule não se sustenta no nível do objetivo: com alvo
 one-hot e dados separáveis, os dois empurram para a certeza. As diferenças reais
-são o ruído agindo como regularizador, o piso do log e os termos extras. Então
+são o ruído agindo como regularizador e os termos extras. Então
 rode o baseline direto primeiro, depois a versão com política, e compare ECE e
 NLL no held-out. Se o RL não ganhar com folga, fique com o simples. É a ordem que
 este repositório incentiva com `--mode baseline` e `--mode rlcd`.
@@ -318,7 +319,7 @@ está implementada aqui); robustez à ordem sob permutação; cobertura seletiva
 por chamada.
 
 Baselines obrigatórios: o chute uniforme, a priori por pergunta ou a classe
-majoritária, e o teto de concordância do anotador ou do professor (este último não
+majoritária, ajustadas nos rótulos de treino e nunca nas linhas avaliadas, e o teto de concordância do anotador ou do professor (este último não
 está implementado aqui). Sem o baseline de classe majoritária, ninguém teria
 notado que os checkpoints base do Laya perdem para ele em famílias nunca vistas.
 

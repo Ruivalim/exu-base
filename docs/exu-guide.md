@@ -194,8 +194,9 @@ likely class. Naive RL maximizes accuracy and destroys calibration.
 The composite reward here adds three pieces:
 
 - log score: the log of the probability given to the target (a weighted sum for
-  soft targets). It punishes low probability on what happened. A floor bounds the
-  punishment.
+  soft targets). It punishes low probability on what happened. It is computed in
+  log space and has no floor, so a confident miss keeps its real price and keeps
+  teaching.
 - spherical score: the inner product of target and `q` divided by the norm of
   `q`, in `[0, 1]`. It rewards mass in the right place without the log's gradient
   spikes.
@@ -234,7 +235,7 @@ gradient of a smoothed version of the same objective plus the spherical and RPS
 terms. The claim that cross-entropy makes a model overconfident and a scoring rule
 does not is not true at the level of the objective: with a one-hot target and
 separable data, both push toward certainty. The real differences are the noise
-acting as a regularizer, the log floor and the extra terms. So run the direct
+acting as a regularizer and the extra terms. So run the direct
 baseline first, then the policy version, and compare ECE and NLL on held-out. If
 RL does not win clearly, keep the simple one. That is the order this repository
 encourages with `--mode baseline` and `--mode rlcd`.
@@ -311,7 +312,8 @@ level is not implemented here); order robustness under permutation; selective
 coverage at the most confident 80% and 50%; and latency percentiles for 1, 5, 10
 and 50 questions per call.
 
-Mandatory baselines: random, the per-question prior or majority class, and the
+Mandatory baselines: uniform, the per-question prior or majority class, fitted on
+training labels and never on the rows being scored, and the
 agreement ceiling of the annotator or teacher (this last one is not implemented
 here). Without the majority-class baseline, nobody would have noticed that Laya's
 base checkpoints lose to it on unseen families.

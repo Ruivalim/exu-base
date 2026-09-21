@@ -174,3 +174,74 @@ def test_cross_entropy_weight_changes_the_objective() -> None:
 
     assert metrics.cross_entropy > 0
     assert hybrid.item() == pytest.approx(pure.item() + metrics.cross_entropy, abs=1e-5)
+
+
+def _batch_with_a_confident_miss(gap: float) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    logits = torch.zeros(8, 2)
+    logits[:, 1] = 0.5
+    logits[0, 1] = gap
+    target = torch.tensor([[1.0, 0.0]] * 8)
+    return logits.requires_grad_(True), target, torch.ones(8, 2, dtype=torch.bool)
+
+
+@pytest.mark.parametrize("gap", [12.0, 50.0])
+def test_the_cross_entropy_term_learns_from_a_confident_miss(gap: float) -> None:
+    # The auxiliary cross-entropy used to clamp at 1e-4 too, so with every sampled
+    # candidate on the floor this row had a gradient of about 3e-8.
+    logits, target, mask = _batch_with_a_confident_miss(gap)
+
+    loss, metrics = policy_gradient_loss(
+        logits, target, mask, sigma=0.4, generator=torch.Generator().manual_seed(3)
+    )
+    loss.backward()
+
+    assert math.isfinite(metrics.loss)
+    assert logits.grad[0, 1].item() > 0.1
+    assert logits.grad[0, 0].item() < -0.1
+
+
+@pytest.mark.parametrize("gap", [12.0, 50.0])
+@pytest.mark.parametrize("mode", ["batch", "group"])
+def test_the_pure_policy_term_learns_from_a_confident_miss(gap: float, mode: str) -> None:
+    logits, target, mask = _batch_with_a_confident_miss(gap)
+    config = PolicyConfig(samples_per_question=8, cross_entropy_weight=0.0, advantage_norm=mode)
+
+    loss, _metrics = policy_gradient_loss(
+        logits, target, mask, config=config, sigma=1.0, generator=torch.Generator().manual_seed(3)
+    )
+    loss.backward()
+
+    assert logits.grad[0, 1].item() > 1e-4
+    assert logits.grad[0, 0].item() < -1e-4
+
+
+def test_sampled_candidates_are_scored_in_log_space() -> None:
+    # softmax underflows to an exact zero at this gap. Scoring log(softmax(z))
+    # would make the reward -inf and every advantage NaN.
+    logits, target, mask = _batch_with_a_confident_miss(200.0)
+
+    loss, metrics = policy_gradient_loss(
+        logits, target, mask, sigma=0.4, generator=torch.Generator().manual_seed(3)
+    )
+    loss.backward()
+
+    assert math.isfinite(metrics.loss)
+    assert math.isfinite(metrics.mean_reward)
+    assert metrics.mean_reward < -20
+    assert torch.isfinite(logits.grad).all()
+
+
+def test_the_policy_loss_ignores_padded_options_under_half_precision_sentinels() -> None:
+    sentinel = torch.finfo(torch.float32).min
+    logits = torch.tensor([[0.2, 1.0, sentinel], [0.0, 0.3, 0.1]], requires_grad=True)
+    target = torch.tensor([[0.0, 1.0, 0.0], [0.2, 0.3, 0.5]])
+    mask = torch.tensor([[True, True, False], [True, True, True]])
+
+    loss, metrics = policy_gradient_loss(
+        logits, target, mask, sigma=0.4, generator=torch.Generator().manual_seed(1)
+    )
+    loss.backward()
+
+    assert math.isfinite(metrics.loss)
+    assert torch.isfinite(logits.grad).all()
+    assert logits.grad[0, 2].item() == 0

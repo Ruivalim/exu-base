@@ -233,6 +233,51 @@ print(decision.label, decision.probabilities, decision.confidence, decision.shou
   [evaluation.md](evaluation.md) before putting a business threshold on either.
 - `decision.expected_level` is only meaningful for `score` questions.
 
+### From the command line
+
+`exu-decide` is the same runtime behind a CLI. One question, written with flags:
+
+```bash
+exu-decide --checkpoint artifacts/exu \
+  --state "I was charged twice for the same invoice." \
+  --instruction "Where should this ticket go?" \
+  --option "billing=payment, invoice or refund" \
+  --option "support=access or outage"
+```
+
+`--option NAME[=DESCRIPTION]` repeats, and only the first `=` separates the two.
+`--kind score` takes `--level TEXT`, lowest first, and `--kind noul` answers `No` or
+`Yes` unless `--false-option` and `--true-option` say otherwise. `--state-file`
+reads the state from a file.
+
+Many questions, one JSON record per line, from a file or from stdin with `-`:
+
+```bash
+exu-decide --checkpoint artifacts/exu --input questions.jsonl --output decisions.jsonl
+```
+
+A record needs `state` and `question`, in the dataset format. `id` is echoed when
+it is there and everything else is ignored, so a dataset file works as it is. The
+output is one JSON object per question, in input order, with `label`,
+`confidence`, `entropy_confidence`, `should_act`, `expected_level`, and
+`probabilities` and `logits` keyed by option name.
+
+`--top-only` keeps just the winner: `{"label": "billing", "confidence": 0.87}`, plus
+the `id` when there is one. `--metrics` adds a `metrics` object to every answer
+(`batch_ms`, `batch_size`, `per_question_ms`) and prints one JSON summary line to
+stderr (`questions`, `batches`, `load_ms`, `inference_ms`, `first_batch_ms`,
+`questions_per_second`), so stdout keeps one schema. The time covers the whole
+answer: building the sequences, the forward pass and reading the result back. The
+first batch on a GPU also pays for warm-up, which is why it is reported apart. A
+question does not have a latency of its own inside a batch, so `per_question_ms`
+is the batch time divided by its size.
+
+The whole input is parsed before the first forward pass. A broken line is named
+(`error: line 7: missing field 'question'`), the exit code is 1, and nothing is
+answered, so a pipeline never receives half a result. A malformed command line
+exits with 2. Every call loads the checkpoint, which costs seconds: a service
+should keep a `DecisionRuntime` resident instead.
+
 The checkpoint format, the validation performed before loading and the
 device/precision rules are in [checkpoints.md](checkpoints.md).
 

@@ -10,6 +10,13 @@ the valid options and the per-question class prior. `evaluate` adds the majority
 class as a third one. In Laya, the base multilingual checkpoints scored *below*
 the majority-class baseline on unseen task families, which nobody would have
 noticed without that comparison.
+
+A baseline is only a bar if it could be deployed, so it must not read the labels
+it is scored against: mutate the evaluation targets and its predictions have to
+stay put. The prior and the majority class are therefore fitted on reference rows,
+the training split by default. The mean of the evaluation targets themselves is
+kept as ``prior_in_sample``, a diagnostic, never a bar: a question that occurs once
+gets its own target back.
 """
 
 from __future__ import annotations
@@ -22,6 +29,9 @@ from torch import Tensor
 
 from .data import TrainingExample
 from .scoring import validate_distributions
+from .types import DecisionType
+
+QuestionKey = tuple[str, str, tuple[str, ...]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,33 +163,97 @@ def stack_examples(
     return targets, mask, tuple(kinds), mask.sum(dim=-1)
 
 
-def prior_baseline(examples: Sequence[TrainingExample]) -> Tensor:
-    """Per-question mean target: the strongest trivial distribution baseline."""
+@dataclass(frozen=True, slots=True)
+class ReferencePrior:
+    """Per-question label mass, fitted on rows that are never the rows being scored.
+
+    ``prior[q, k] = (count[q, k] + 1/K) / (n[q] + 1)``: symmetric Dirichlet
+    smoothing with a total pseudocount of one, soft targets counted as mass. At
+    ``n = 0`` it is exactly ``1/K``, so the fallback for an unseen question and the
+    smoothing are one rule. It never predicts an exact zero, which matters because
+    the NLL metric clamps at float32 ``tiny``: one outcome the reference never saw
+    would cost 87 nats on its own. It is a reproducible default, not a claim that
+    this amount of smoothing is optimal.
+    """
+
+    counts: dict[QuestionKey, Tensor]
+    rows: dict[QuestionKey, int]
+
+    def predict(self, examples: Sequence[TrainingExample]) -> tuple[Tensor, Tensor]:
+        """Prior per row, and whether the row's question exists in the reference."""
+        targets, _mask, _kinds, _counts = stack_examples(examples)
+        result = torch.zeros_like(targets)
+        seen = torch.zeros(len(examples), dtype=torch.bool)
+        for index, example in enumerate(examples):
+            order = _canonical_order(example)
+            prior = self._canonical_prior(_question_key(example, order), len(order))
+            result[index, order] = prior
+            seen[index] = _question_key(example, order) in self.rows
+        return result, seen
+
+    def majority(self, examples: Sequence[TrainingExample]) -> Tensor:
+        """One-hot pick of the prior's most likely option.
+
+        A tie goes to the first option in canonical order, so for a ``choice``
+        question the winner does not depend on the order the options are shown in.
+        """
+        targets, _mask, _kinds, _counts = stack_examples(examples)
+        result = torch.zeros_like(targets)
+        for index, example in enumerate(examples):
+            order = _canonical_order(example)
+            prior = self._canonical_prior(_question_key(example, order), len(order))
+            result[index, order[int(prior.argmax().item())]] = 1.0
+        return result
+
+    def _canonical_prior(self, key: QuestionKey, option_count: int) -> Tensor:
+        counts = self.counts.get(key, torch.zeros(option_count, dtype=torch.float32))
+        return (counts + 1.0 / option_count) / (self.rows.get(key, 0) + 1.0)
+
+
+def fit_reference_prior(reference: Sequence[TrainingExample]) -> ReferencePrior:
+    """Count label mass per question over the original reference rows.
+
+    Pass the rows as loaded, not epochs of them and not option-shuffled copies:
+    every repetition would count as a new observation.
+    """
+    if not reference:
+        raise ValueError("reference cannot be empty")
+    counts: dict[QuestionKey, Tensor] = {}
+    rows: dict[QuestionKey, int] = {}
+    for example in reference:
+        order = _canonical_order(example)
+        key = _question_key(example, order)
+        target = torch.tensor(example.target, dtype=torch.float32)[order]
+        counts[key] = counts.get(key, torch.zeros_like(target)) + target
+        rows[key] = rows.get(key, 0) + 1
+    return ReferencePrior(counts, rows)
+
+
+def prior_in_sample_baseline(examples: Sequence[TrainingExample]) -> Tensor:
+    """Per-question mean of the targets being scored. A diagnostic, never a bar.
+
+    It is the best constant-per-question forecast for log loss and Brier *on this
+    sample*, in hindsight, so beating it on those two means the model used the
+    state. It reads the labels it is scored against: a question that occurs once
+    gets its own target, and its accuracy and ECE mean nothing.
+    """
     targets, _mask, _kinds, _counts = stack_examples(examples)
-    priors: dict[tuple[str, str, tuple[str, ...]], Tensor] = {}
-    rows: list[tuple[tuple[str, str, tuple[str, ...]], int]] = []
+    totals: dict[QuestionKey, Tensor] = {}
+    keyed: list[tuple[QuestionKey, list[int]]] = []
     for index, example in enumerate(examples):
-        key = _question_key(example)
-        rows.append((key, index))
-        priors.setdefault(key, torch.zeros_like(targets[0]))
-        priors[key] += targets[index]
+        order = _canonical_order(example)
+        key = _question_key(example, order)
+        keyed.append((key, order))
+        mass = targets[index, order]
+        totals[key] = totals.get(key, torch.zeros_like(mass)) + mass
     result = torch.zeros_like(targets)
-    for key, index in rows:
-        prior = priors[key]
-        result[index] = prior / prior.sum().clamp_min(torch.finfo(prior.dtype).tiny)
+    for index, (key, order) in enumerate(keyed):
+        total = totals[key]
+        result[index, order] = total / total.sum().clamp_min(torch.finfo(total.dtype).tiny)
     return result
 
 
-def majority_class_baseline(examples: Sequence[TrainingExample]) -> Tensor:
-    """One-hot pick of the most frequent outcome per question."""
-    prior = prior_baseline(examples)
-    winner = prior.argmax(dim=-1, keepdim=True)
-    result = torch.zeros_like(prior)
-    result.scatter_(1, winner, 1.0)
-    return result
-
-
-def random_baseline(examples: Sequence[TrainingExample]) -> Tensor:
+def uniform_baseline(examples: Sequence[TrainingExample]) -> Tensor:
     """The guess-a-label forecast: uniform ``1/K`` over each question's options.
 
     Deterministic, and the weakest thing worth reporting. It carries no
@@ -193,9 +267,22 @@ def random_baseline(examples: Sequence[TrainingExample]) -> Tensor:
     return result / result.sum(dim=-1, keepdim=True).clamp_min(1.0)
 
 
-def _question_key(example: TrainingExample) -> tuple[str, str, tuple[str, ...]]:
+def _canonical_order(example: TrainingExample) -> list[int]:
+    """Presentation index of each option, listed in canonical order.
+
+    Only ``choice`` options are reorderable, so only they are sorted. The levels
+    of a ``score`` question are its meaning, and ``noul`` has two fixed options.
+    """
+    rendered = [option.render() for option in example.question.options]
+    if example.question.kind is DecisionType.CHOICE:
+        return sorted(range(len(rendered)), key=rendered.__getitem__)
+    return list(range(len(rendered)))
+
+
+def _question_key(example: TrainingExample, order: Sequence[int]) -> QuestionKey:
+    options = example.question.options
     return (
         example.question.kind.value,
         example.question.instruction,
-        tuple(option.render() for option in example.question.options),
+        tuple(options[index].render() for index in order),
     )

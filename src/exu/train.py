@@ -32,9 +32,9 @@ from .checkpoint import save_checkpoint
 from .data import DecisionDataset, TrainingBatch, load_jsonl
 from .devices import autocast_context, resolve_device
 from .evaluation import collect, metrics_for
-from .model import ExuConfig, ExuModel
+from .model import ExuConfig, ExuModel, masked_log_softmax
 from .policy import PolicyConfig, policy_gradient_loss, sigma_for
-from .scoring import proper_scoring_loss
+from .scoring import proper_scoring_loss, reward_definition
 from .sequence import SequenceBuilder, SequenceConfig
 
 _DEFAULT_POLICY = PolicyConfig()
@@ -249,6 +249,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "batch_size": args.batch_size,
         "grad_accum": args.grad_accum,
         "option_shuffle": args.option_shuffle,
+        "reward": reward_definition(args.spherical_weight, args.rps_weight),
         "policy": asdict(policy) if policy else None,
         "train_epochs": [asdict(item) for item in history],
         "validation": asdict(validation),
@@ -293,7 +294,7 @@ def _train_epoch(
             output = model(**moved.model_inputs())
             if policy is None:
                 loss = proper_scoring_loss(
-                    output.probabilities,
+                    masked_log_softmax(output.logits, moved.option_mask),
                     moved.targets,
                     moved.option_mask,
                     moved.ordinal_mask,

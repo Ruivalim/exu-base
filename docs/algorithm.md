@@ -11,12 +11,16 @@ summing to one), `q` is the model's distribution, `p` is a valid-option mask, an
 ### Log score
 
 ```
-S_log(q, y) = sum_k y_k * log(max(q_k, floor))
+S_log(q, y) = sum_k y_k * log q_k
 ```
 
-Bounded below by `log(floor)` (default `floor = 1e-4`, so about -9.21), so one
-confident miss cannot dominate the batch. The floor costs a small indifference
-region near zero probability, which is the usual price for a bounded log score.
+Computed from `log_softmax` of the logits (`masked_log_softmax`), in float32, never
+as `log(softmax(z))`: softmax underflows to an exact zero on a confident miss.
+There is no floor. A clamp at `1e-4` made the rule improper for any component
+below about `2.7e-4`, where reporting zero outscored the truth, and it switched
+off the gradient of every confidently wrong row. The gradient of this term in the
+logits is `y - q`, bounded by one whatever the miss, so nothing needs a bound to
+stay stable. Mass the target does not claim is skipped, so `0 * log 0` reads as 0.
 
 The log score is the negative cross-entropy, so a direct cross-entropy baseline
 and a log-score reward optimize the same quantity up to sign.
@@ -27,7 +31,8 @@ and a log-score reward optimize the same quantity up to sign.
 S_sph(q, y) = <y, q> / ||q||
 ```
 
-In `[0, 1]`, one for an exact answer. It rewards mass in the right place without
+In `[0, 1]`. Honesty maximizes it, and at `q = y` it equals `||y||`: one for a
+one-hot target, `0.707` for an exact `[0.5, 0.5]`. It rewards mass in the right place without
 the log's gradient spikes near zero probability.
 
 ### Ranked probability score
@@ -102,7 +107,7 @@ against this identity directly.
 
 ```
 L = L_policy + ce_weight * CE(q, y)
-CE(q, y) = - sum_k y_k * log(max(q_k, floor))
+CE(q, y) = - sum_k y_k * log q_k        (from log_softmax, no floor)
 ```
 
 `ce_weight = 1.0` matches Laya's fine-tune; `0.0` is pure policy-gradient
@@ -128,10 +133,32 @@ Both were real failures during development, and both are covered by tests.
   gradient, the reward path leaks into the policy term and the loss is no longer
   a score-function estimator.
 
+## What the policy optimizes is a smoothed reward
+
+The policy gradient ascends `J(z) = E[S(softmax(z + sigma * noise), y)]`, not `S` at
+the unperturbed logits. `S` is strictly proper, `J` is not the same function, and
+its optimum sits slightly on the confident side of the truth. For a binary target
+of `0.30` the optimum centre is `0.277` at `sigma = 0.4`, `0.286` at `0.3` and
+`0.298` at `0.1`, by quadrature of this reward. Hard labels do not escape it,
+because the expectation is linear in `y`. What ships is the last sigma, which is
+one reason to anneal it, and one reason to compare against the direct baseline on
+held-out data instead of trusting propriety alone.
+
+## What removing the floor costs in `batch` mode
+
+`advantage_norm="batch"` divides by the standard deviation of the raw rewards of
+the whole batch. With an unbounded log score, one confidently wrong row inflates
+that deviation and the other rows of its batch learn slower for that step. In a
+probe of 8 rows with one miss they lost 6% to 22% of their gradient under the
+fine-tune preset and 23% to 82% under the base preset, at logit gaps of 12 and 50.
+It is a slowdown and not an instability, and it ends on its own, because the
+wrong row now has a gradient and its gap shrinks. `advantage_norm="group"` does
+not have the effect: each question divides by its own deviation, and additive
+logit noise keeps that spread near `sigma` whatever the gap.
+
 ## What the reward does not buy you
 
 The reward is differentiable in the logits, so sampling is optional. Its real
-contributions are the noise as a regularizer, the log floor and the spherical and
-RPS terms. Honesty comes from the scoring rule being strictly proper, not from
+contributions are the noise as a regularizer and the spherical and RPS terms. Honesty comes from the scoring rule being strictly proper, not from
 the sampling. Run the direct baseline, then the policy version, and keep the
 policy version only if it wins on held-out ECE or NLL.

@@ -1,9 +1,14 @@
 """Evaluate a checkpoint on a JSONL split.
 
 Reports decision quality and calibration overall, per question kind and per task
-family, next to three trivial baselines: random, the per-question prior, and the
+family, next to three trivial baselines: uniform, the per-question prior, and the
 majority class. In Laya the base checkpoints scored below the
 majority-class baseline on unseen families, so these numbers are not decoration.
+
+The prior and the majority class are fitted on reference labels, the ``train``
+split of ``--data`` unless ``--reference`` says otherwise, and never on the split
+being scored. Without a usable reference they are reported as unavailable, with
+the reason, instead of quietly falling back to the evaluation labels.
 
 Optional passes: order robustness (does the answer survive an option permutation)
 and latency (p50/p95 for 1, 5, 10 and 50 questions in one call).
@@ -30,12 +35,13 @@ from .evaluation import (
     order_robustness,
 )
 from .metrics import (
+    ReferencePrior,
     classification_metrics,
-    majority_class_baseline,
-    prior_baseline,
-    random_baseline,
+    fit_reference_prior,
+    prior_in_sample_baseline,
     selective_coverage,
     stack_examples,
+    uniform_baseline,
 )
 from .sequence import SequenceBuilder
 
@@ -45,6 +51,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint", required=True, type=Path, help="checkpoint directory")
     parser.add_argument("--data", required=True, type=Path, help="UTF-8 JSONL records")
     parser.add_argument("--split", help="optional split name selected from --data")
+    parser.add_argument(
+        "--reference",
+        type=Path,
+        help="JSONL whose labels fit the prior and majority baselines (default: --data)",
+    )
+    parser.add_argument(
+        "--reference-split",
+        default="train",
+        help="split of the reference file to fit the baselines on",
+    )
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     parser.add_argument(
@@ -91,7 +107,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             key: asdict(value)
             for key, value in grouped_metrics(collected, temperature, "family").items()
         },
-        "baselines": _baselines(examples),
+        "baselines": _baselines(
+            examples,
+            reference=args.reference or args.data,
+            reference_split=args.reference_split,
+            data=args.data,
+            split=args.split,
+        ),
         "coverage": selective_coverage(
             collected.probabilities(temperature), collected.target, collected.option_mask
         ),
@@ -123,18 +145,79 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def _baselines(examples: Sequence) -> dict[str, dict[str, float]]:
+def _baselines(
+    examples: Sequence,
+    *,
+    reference: Path,
+    reference_split: str,
+    data: Path,
+    split: str | None,
+) -> dict[str, object]:
     targets, mask, kinds, _counts = stack_examples(examples)
     ordinal = _ordinal_mask(kinds)
-    baselines = {
-        "random": random_baseline(examples),
-        "prior": prior_baseline(examples),
-        "majority": majority_class_baseline(examples),
+
+    def score(probabilities, rows=None) -> dict[str, float]:
+        if rows is None:
+            return asdict(
+                classification_metrics(probabilities, targets, mask, ordinal_mask=ordinal)
+            )
+        kept = None if ordinal is None else ordinal[rows]
+        return asdict(
+            classification_metrics(
+                probabilities[rows], targets[rows], mask[rows], ordinal_mask=kept
+            )
+        )
+
+    report: dict[str, object] = {
+        "uniform": score(uniform_baseline(examples)),
+        "prior": None,
+        "majority": None,
+        "prior_in_sample": score(prior_in_sample_baseline(examples)),
     }
-    return {
-        name: asdict(classification_metrics(probabilities, targets, mask, ordinal_mask=ordinal))
-        for name, probabilities in baselines.items()
+    provenance: dict[str, object] = {
+        "path": str(reference),
+        "split": reference_split,
+        "smoothing": "(count + 1/K) / (n + 1)",
+        "unseen_question": "uniform, the n = 0 case of the smoothing",
+        "question_key": "kind, instruction and options; choice options in any order",
+        "unavailable": None,
     }
+    report["reference"] = provenance
+
+    prior = _fit_reference(reference, reference_split, data, split, provenance)
+    if prior is None:
+        return report
+
+    predictions, seen = prior.predict(examples)
+    provenance["seen_rows"] = int(seen.sum().item())
+    provenance["unseen_rows"] = int((~seen).sum().item())
+    report["prior"] = score(predictions)
+    if seen.any() and not seen.all():
+        report["prior_seen"] = score(predictions, seen)
+        report["prior_unseen"] = score(predictions, ~seen)
+    # A one-hot forecast puts an exact zero on every outcome it misses, so its NLL
+    # is the error rate times -log(float32 tiny). Only the accuracy means anything.
+    report["majority"] = {"accuracy": score(prior.majority(examples))["accuracy"]}
+    return report
+
+
+def _fit_reference(
+    reference: Path,
+    reference_split: str,
+    data: Path,
+    split: str | None,
+    provenance: dict[str, object],
+) -> ReferencePrior | None:
+    if reference.resolve() == data.resolve() and split in (None, reference_split):
+        provenance["unavailable"] = "the reference rows are among the rows being scored"
+        return None
+    try:
+        rows = load_jsonl(reference, reference_split)
+    except (OSError, ValueError) as error:
+        provenance["unavailable"] = str(error)
+        return None
+    provenance["rows"] = len(rows)
+    return fit_reference_prior(rows)
 
 
 def _ordinal_mask(kinds: Sequence[str]):

@@ -12,8 +12,11 @@ class. Naive RL maximizes accuracy and destroys calibration.
 
 Three rules are combined here:
 
-- log score: ``sum(y * log q)``. Punishes low probability on what happened.
-  Bounded below by ``log(log_floor)`` so one confident miss cannot dominate.
+- log score: ``sum(y * log q)``. Punishes low probability on what happened. It is
+  computed from log-probabilities and has no floor: a clamp at ``log(1e-4)`` made
+  the rule improper for any component below about ``2.7e-4`` and switched off the
+  gradient of every confidently wrong row. Its gradient in the logits is bounded
+  by one whatever the miss, so nothing needs protecting there.
 - spherical score: ``<y, q> / ||q||``, in ``[0, 1]``. Rewards mass in the right
   place without the log's gradient spikes.
 - ranked probability score: quadratic distance between cumulative distributions.
@@ -48,11 +51,34 @@ def validate_distributions(probabilities: Tensor, target: Tensor, option_mask: T
         raise ValueError("predicted probabilities must sum to one")
 
 
-def log_score(probabilities: Tensor, target: Tensor, log_floor: float = 1e-4) -> Tensor:
-    """Log score per row. Higher is better. ``log_floor`` bounds the penalty."""
-    if not 0 < log_floor <= 1:
-        raise ValueError("log_floor must be in (0, 1]")
-    return (target * probabilities.clamp_min(log_floor).log()).sum(dim=-1)
+# Bump when the definition of the reward changes. `training.json` records it, so
+# two runs are only compared when they optimized the same thing.
+REWARD_VERSION = 1
+
+
+def reward_definition(spherical_weight: float = 0.75, rps_weight: float = 1.0) -> dict[str, object]:
+    """The reward a run optimized, in the form `training.json` stores."""
+    _validate_weights(spherical_weight, rps_weight)
+    return {
+        "version": REWARD_VERSION,
+        "log_term": "log_softmax",
+        "spherical_weight": spherical_weight,
+        "rps_weight": rps_weight,
+    }
+
+
+def log_score(log_probabilities: Tensor, target: Tensor) -> Tensor:
+    """Log score per row, ``sum(y * log q)``. Higher is better, unbounded below.
+
+    Takes log-probabilities, see :func:`exu.model.masked_log_softmax`. Mass the
+    target does not claim is skipped instead of multiplied, so a padded or
+    impossible option at ``log q = -inf`` reads as ``0 * log 0 = 0`` and not as
+    NaN. Mass the target does claim on such an option scores ``-inf``, honestly.
+    """
+    if log_probabilities.shape != target.shape:
+        raise ValueError("log_probabilities and target must have identical shape")
+    claimed = target > 0
+    return (target * log_probabilities.masked_fill(~claimed, 0.0)).sum(dim=-1)
 
 
 def spherical_score(probabilities: Tensor, target: Tensor) -> Tensor:
@@ -69,22 +95,28 @@ def ranked_probability_score(probabilities: Tensor, target: Tensor, option_mask:
 
 
 def composite_score(
-    probabilities: Tensor,
+    log_probabilities: Tensor,
     target: Tensor,
     option_mask: Tensor,
     ordinal_mask: Tensor | None = None,
     *,
     spherical_weight: float = 0.75,
     rps_weight: float = 1.0,
-    log_floor: float = 1e-4,
 ) -> Tensor:
     """Per-row strictly proper reward. Higher is better, one value per row.
 
     Every question gets log and spherical score. Ordinal questions additionally
     subtract ranked probability score, so near misses beat far ones.
+
+    The one input is log-probabilities. The spherical and ranked terms read the
+    probabilities off them, so the three terms always score the same report, and
+    whatever sits on a padded option is ignored.
     """
     _validate_weights(spherical_weight, rps_weight)
-    score = log_score(probabilities, target, log_floor) + spherical_weight * spherical_score(
+    if log_probabilities.shape != target.shape or target.shape != option_mask.shape:
+        raise ValueError("log_probabilities, target and option_mask must have identical shape")
+    probabilities = log_probabilities.exp().masked_fill(~option_mask.bool(), 0.0)
+    score = log_score(log_probabilities, target) + spherical_weight * spherical_score(
         probabilities, target
     )
     if ordinal_mask is not None:
@@ -96,24 +128,22 @@ def composite_score(
 
 
 def proper_scoring_loss(
-    probabilities: Tensor,
+    log_probabilities: Tensor,
     target: Tensor,
     option_mask: Tensor,
     ordinal_mask: Tensor | None = None,
     *,
     spherical_weight: float = 0.75,
     rps_weight: float = 1.0,
-    log_floor: float = 1e-4,
 ) -> Tensor:
     """Negative mean composite score, for the direct (non-RL) baseline."""
     score = composite_score(
-        probabilities,
+        log_probabilities,
         target,
         option_mask,
         ordinal_mask,
         spherical_weight=spherical_weight,
         rps_weight=rps_weight,
-        log_floor=log_floor,
     )
     return -score.mean()
 
