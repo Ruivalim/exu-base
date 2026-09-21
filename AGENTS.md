@@ -56,7 +56,7 @@ src/exu/          the package, all of it (there is no second source tree)
 tests/             synthetic fixtures only, never real data
 docs/              guide, algorithm, dataset format, checkpoints, evaluation
 site/              static explainer, no framework, built into _site/
-scripts/           smoke.sh, tiny encoder builder, site build
+scripts/           smoke.sh, tiny encoder builder, site build, RunPod GPU rental helper
 examples/          end_to_end.py, offline, runs in seconds on CPU
 ```
 
