@@ -22,6 +22,7 @@ from .data import TrainingBatch, TrainingExample
 from .metrics import DecisionMetrics, classification_metrics
 from .model import ExuModel, masked_softmax
 from .sequence import EncodedQuestion, SequenceBuilder
+from .types import DecisionType
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,18 +142,37 @@ def order_robustness(
     seed: int = 17,
     device: torch.device | str = "cpu",
     batch_size: int = 32,
-) -> dict[str, float]:
+) -> dict[str, float | int | str | None]:
     """How often the answer changes when the option order is permuted.
 
     Laya changed its answer in 15% to 23% of cases, which is the
     signature of a model that learned position instead of criteria. Report
     ``stability``: the fraction of permutations agreeing with the unpermuted
     answer. It should be close to 1.
+
+    Ordinal questions are left out and counted in ``skipped_ordinal``. The order
+    of a scale is its meaning: training never shuffles it, the ranked probability
+    score reads levels by position, and a permuted scale is not a scale. A model
+    that answers a ``score`` question by position is doing the right thing, so
+    counting it here reported a correct model as unstable (0.23 on a five-level
+    dataset, which is chance). With nothing left to permute, ``stability`` is
+    ``None`` and ``unavailable`` says why.
     """
     if permutations < 1:
         raise ValueError("permutations must be positive")
     if not examples:
         raise ValueError("examples cannot be empty")
+    skipped = sum(example.question.kind is DecisionType.SCORE for example in examples)
+    examples = [example for example in examples if example.question.kind is not DecisionType.SCORE]
+    if not examples:
+        return {
+            "examples": 0,
+            "permutations": permutations,
+            "stability": None,
+            "mean_winner_probability": None,
+            "skipped_ordinal": skipped,
+            "unavailable": "every question is ordinal, and the order of a scale is its meaning",
+        }
 
     base = _forward_probabilities(
         model,
@@ -196,6 +216,8 @@ def order_robustness(
         "permutations": permutations,
         "stability": agreement / total,
         "mean_winner_probability": winner_mass / total,
+        "skipped_ordinal": skipped,
+        "unavailable": None,
     }
 
 

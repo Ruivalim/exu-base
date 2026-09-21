@@ -112,7 +112,9 @@ def test_order_robustness_is_one_for_a_model_that_reads_the_options(monkeypatch)
 
     report = order_robustness(None, _QuestionBuilder(), examples, TemperatureMap(), permutations=5)
 
-    assert report["examples"] == 24
+    assert report["examples"] == 19
+    assert report["skipped_ordinal"] == 5
+    assert report["unavailable"] is None
     assert report["permutations"] == 5
     assert report["stability"] == 1.0
     assert report["mean_winner_probability"] == pytest.approx(0.7)
@@ -127,6 +129,7 @@ def test_order_robustness_catches_a_model_that_answers_by_position(monkeypatch) 
     kept = [
         random_order(example.option_count, generator)[0] == 0
         for example in examples
+        if example.question.kind.value != "score"
         for _ in range(5)
     ]
 
@@ -136,13 +139,53 @@ def test_order_robustness_catches_a_model_that_answers_by_position(monkeypatch) 
     assert report["stability"] < 0.7
 
 
+def test_order_robustness_never_permutes_an_ordinal_scale(monkeypatch) -> None:
+    # The order of a scale is its meaning, and training never shuffles it. A model
+    # that answers a score question by position is doing the right thing, so such a
+    # question must not count against it. This stub answers by position everywhere:
+    # with the ordinal rows in, its stability would drop further.
+    seen: list[str] = []
+
+    def by_position(question):
+        seen.append(question.kind.value)
+        return 0
+
+    monkeypatch.setattr(evaluation, "_forward_probabilities", _stub_forward(by_position))
+    ordinal = [item for item in smoke_examples() if item.question.kind.value == "score"]
+    others = [item for item in smoke_examples() if item.question.kind.value != "score"]
+
+    mixed = order_robustness(None, _QuestionBuilder(), ordinal + others, TemperatureMap())
+    alone = order_robustness(None, _QuestionBuilder(), others, TemperatureMap())
+
+    assert "score" not in seen
+    assert (mixed["examples"], mixed["skipped_ordinal"]) == (len(others), len(ordinal))
+    assert mixed["stability"] == alone["stability"]
+
+
+def test_order_robustness_says_so_when_there_is_nothing_to_permute(monkeypatch) -> None:
+    def fail(*_arguments):
+        raise AssertionError("no forward pass is needed when every question is ordinal")
+
+    monkeypatch.setattr(evaluation, "_forward_probabilities", fail)
+    ordinal = [item for item in smoke_examples() if item.question.kind.value == "score"]
+
+    report = order_robustness(None, _QuestionBuilder(), ordinal, TemperatureMap())
+
+    assert report["stability"] is None
+    assert report["mean_winner_probability"] is None
+    assert (report["examples"], report["skipped_ordinal"]) == (0, 5)
+    assert "ordinal" in report["unavailable"]
+
+
 def test_order_robustness_runs_on_the_real_model() -> None:
     builder, dataset, _loader, model = _setup()
 
     report = order_robustness(model, builder, dataset.examples, TemperatureMap(), permutations=3)
 
-    assert report["examples"] == 24
+    assert report["examples"] == 19
+    assert report["skipped_ordinal"] == 5
     assert report["permutations"] == 3
+    assert 0.0 <= report["stability"] <= 1.0
 
 
 def test_latency_benchmark_reports_percentiles() -> None:

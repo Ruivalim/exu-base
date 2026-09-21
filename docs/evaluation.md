@@ -115,6 +115,12 @@ permutation. `stability` close to 1 means the model reads the criteria. Laya
 changed its answer in 15% to 23% of cases, the signature of a
 model that learned position.
 
+`score` questions are left out of this pass and counted in `skipped_ordinal`. The
+order of a scale is its meaning: `--option-shuffle` never shuffles it, the ranked
+probability score reads levels by position, and a permuted scale is not a scale. A
+model that answers a `score` question by position is doing the right thing. When
+every question is ordinal, `stability` is `null` and `unavailable` says why.
+
 Also reported: `mean_winner_probability`, the mass the model keeps on the
 unpermuted winner under permutation.
 
