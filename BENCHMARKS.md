@@ -55,6 +55,7 @@ numbers derived from them are recorded here.
 | GoEmotions, raw | `google-research-datasets/go_emotions` | apache-2.0 | 58,009 comments, 28 emotions, one `choice` question. Target is the share of rater marks per label. 85.3% of targets are soft, 3.64 raters per comment, smallest positive mass 0.077. Splits by id hash: 46,370 / 2,869 / 2,886 / 5,884 (train / validation / calibration / test). |
 | MultiNLI | `nyu-mll/multi_nli` | cc-by-3.0, cc-by-sa-3.0, mit, other (by genre) | Hard labels. 50,000-row deterministic subsample for training, and 16,000-row and 6,000-row subsamples for probes. Validation from `validation_matched`. |
 | ChaosNLI, MNLI part | `metaeval/chaos-mnli-ambiguity` | **none declared** | 1,599 items labelled by 100 annotators each, smallest positive mass 0.01. Used as calibration (810) and test (789) for models trained on MultiNLI. Leak guards are on text: no ChaosNLI pair appears in training, and 142 training rows plus 4,011 validation rows that share a premise with it were dropped. |
+| BoolQ | `google/boolq` | cc-by-sa-3.0 | 12,697 yes-or-no questions about a passage, hard labels, one `noul` question with the BoolQ question and the passage in the state. The first real data for the `noul` kind. 62% of answers are yes. Splits by text hash: 8,473 / 954 from BoolQ's train, and its validation split halved into calibration (1,611) and test (1,659). |
 | Measuring Hate Speech | `ucberkeley-dlab/measuring-hate-speech` | cc-by-4.0 | 17,352 comments with 3 or more annotators, times 4 ordinal facets (`insult`, `dehumanize`, `violence` on 5 levels, `hatespeech` on 3). 69,408 `score` questions with soft targets. Splits by comment hash, so a comment never crosses splits: 55,656 / 3,392 / 3,560 / 6,800. |
 
 Two things the datasets taught before any model ran:
@@ -146,31 +147,50 @@ options in four different orders moved the top probability from 0.62 to 0.44.
 
 Measuring Hate Speech is the Berkeley D-Lab corpus described under Datasets.
 
-**In progress.** Same three arms and seeds as section 1, first use of the `score`
-kind and of the ranked-probability term against a distribution. Bars on the test
-split (6,800 rows): `prior` NLL 1.2838, RPS 0.1039; `uniform` NLL 1.4817, RPS 0.1477.
+Same three arms and seeds as section 1, `bert-base-uncased`, 3 epochs. First use of
+the `score` kind and of the ranked-probability term against a distribution.
+Calibrated test split, 6,800 rows. All 9 jobs finished, about 35 minutes each. Bars:
+`prior` NLL 1.2838 and RPS 0.1039, `uniform` NLL 1.4817 and RPS 0.1477.
 
-Finished so far (2026-09-21 15:35 UTC), calibrated test split:
+| Arm | NLL | Brier | Accuracy | ECE | RPS | Ordinal MAE | Temperature |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline | 1.0533 ± 0.0052 | 0.1952 ± 0.0024 | 0.6094 ± 0.0052 | 0.0789 ± 0.0015 | 0.0491 ± 0.0013 | 0.4617 ± 0.0077 | 1.494 ± 0.166 |
+| rlcd, `batch` | 1.0527 ± 0.0030 | 0.1946 ± 0.0009 | 0.6143 ± 0.0029 | 0.0816 ± 0.0077 | 0.0490 ± 0.0003 | 0.4633 ± 0.0022 | 1.438 ± 0.033 |
+| rlcd, `group` | 1.1440 ± 0.0175 | 0.2207 ± 0.0075 | 0.6083 ± 0.0028 | 0.1433 ± 0.0182 | 0.0602 ± 0.0035 | 0.5522 ± 0.0307 | 3.013 ± 0.089 |
 
-| Arm | Seeds done | NLL | Brier | Accuracy | ECE | Temperature |
-| --- | --- | --- | --- | --- | --- | --- |
-| baseline | 2 of 3 | 1.0505 ± 0.0025 | 0.1938 ± 0.0005 | 0.6121 ± 0.0033 | 0.0790 ± 0.0022 | 1.517 ± 0.228 |
-| rlcd, `batch` | 1 of 3 | 1.0502 | 0.1936 | 0.6172 | 0.0804 | 1.462 |
-| rlcd, `group` | 0 of 3 | | | | | |
+Paired against `baseline`, same seed:
 
-A quick check before launching it, 8,000 rows and one epoch: NLL 1.0735 against the
-prior's 1.2919, RPS 0.0559 against 0.1108, per-facet NLL from 0.574 (`hatespeech`) to
-1.412 (`dehumanize`). So this task is learnable with the default recipe.
+| Arm | NLL | Brier | Accuracy | ECE | RPS |
+| --- | --- | --- | --- | --- | --- |
+| rlcd, `batch` | -0.0005 ± 0.0033 (2/3 better) | -0.0006 ± 0.0020 (2/3) | +0.0049 ± 0.0045 (2/3) | +0.0027 ± 0.0067 (1/3) | -0.0000 ± 0.0010 (2/3) |
+| rlcd, `group` | +0.0907 ± 0.0130 (0/3) | +0.0256 ± 0.0061 (0/3) | -0.0010 ± 0.0078 (1/3) | +0.0644 ± 0.0197 (0/3) | +0.0111 ± 0.0024 (0/3) |
 
-Too early to read the arms against each other: one paired seed.
+What it says:
 
-**Known problem surfaced here:** order stability came out at 0.23. The evaluator's
-order-robustness pass permutes `score` questions too, and training never shuffles
-them, because the order of an ordinal scale is its meaning. The number is
-meaningless for ordinal questions and the pass should skip them.
+- **Here RLCD and the direct baseline tie.** Every paired difference of the `batch`
+  arm is inside its own spread. On GoEmotions the baseline won by 0.0585 nats, so
+  the two datasets disagree on the size of the gap and agree that RLCD does not win.
+- **`group` loses again, and by more**: a temperature of 3.0 says it came out badly
+  overconfident. `batch` stays the default on two datasets out of two.
+- The model beats the prior by 0.23 nats of NLL and halves its RPS, so the ordinal
+  path (the `score` kind, the ranked-probability term, no shuffling of levels) works
+  on real data. Per-facet NLL in one baseline run: `hatespeech` 0.590, `violence`
+  1.002, `insult` 1.223, `dehumanize` 1.394.
+- All arms are strongly overconfident before calibration (temperature 1.4 to 3.0),
+  more than on GoEmotions.
 
-Queued behind it: the `baseline` and `rlcd batch` arms again with
-`answerdotai/ModernBERT-base`, on this dataset and on GoEmotions.
+A quick check before launching it, 8,000 rows and one epoch, had given NLL 1.0735
+against the prior's 1.2919, which is how the task was known to be learnable.
+
+**A bug surfaced here, since fixed:** order stability came out at 0.23, which is
+chance for five levels. The order-robustness pass permuted `score` questions too,
+and training never shuffles them, because the order of an ordinal scale is its
+meaning. The pass now leaves ordinal questions out. The reports of this experiment
+were written before the fix, so their stability column is not shown and should be
+ignored.
+
+Running now: the `baseline` and `rlcd batch` arms again with
+`answerdotai/ModernBERT-base`, on this dataset and then on GoEmotions.
 
 ## 5. NLI: the marker readout does not learn, and what does
 
@@ -215,12 +235,33 @@ the markers.** Also ruled out, each at about 0.33: a zero-initialised type
 embedding, a single decision layer, and decision layers initialised from the
 encoder's top layers.
 
-Why GoEmotions works and NLI does not, as far as the evidence goes: in GoEmotions
-an option's name has a lexical link to the text ("gratitude" and "thank you"), so
-each marker can compute its own match and gets a gradient early. In NLI
-"entailment" has no lexical link to anything. The answer is a global property of
-the state, every marker sees the same thing, and the softmax cancels what is common
-to all options.
+### The cause: a symmetric saddle, and balanced labels
+
+Three explanations were tried and thrown out before the one that held. `marker`
+scorer, `bert-base-uncased`, seed 17:
+
+| Hypothesis | Test | Result | Verdict |
+| --- | --- | --- | --- |
+| The three NLI option descriptions are nearly identical | NLI with bare option names | NLL 1.0986, accuracy 0.354 | rejected |
+| "entailment" means nothing to the encoder | NLI with options `yes` / `maybe` / `no` | NLL 1.0986, accuracy 0.330 | rejected |
+| The answer needs a lexical cue from the option | BoolQ, `No` / `Yes` | accuracy 0.703, NLL 0.636 | rejected: it learns |
+| The same | BoolQ with options `alpha` / `beta` | accuracy 0.715, NLL 0.590 | rejected: it still learns |
+| **The training labels are balanced** | NLI, training split skewed to 60 / 25 / 15 | **accuracy 0.689**, NLL 0.722 | **confirmed** |
+| **The same, from the other side** | BoolQ, training split balanced to 50 / 50 | **NLL 0.6931 = log 2**, train loss flat at 0.167 | **confirmed** |
+
+Validation and test splits are the same in every row. Only the training labels of
+the last two rows were resampled.
+
+The mechanism: the scorer is shared across markers, so at the start every option
+gets nearly the same logit, and the gradient that reaches anything the options have
+in common is `sum_k (q_k - y_k) * c = 0`. Something has to make the options
+distinguishable first. A skewed label prior does, because scoring the frequent
+option higher pays at once, and that forces the model to tell the markers apart by
+their text. Lexical overlap between an option and the state does too, which is
+GoEmotions. With balanced labels and no overlap nothing does, and the model sits at
+the saddle for as long as it is trained. MultiNLI is balanced to within 0.4%.
+GoEmotions and Measuring Hate Speech are heavily skewed, which is why they never
+showed this.
 
 ### The readout that unlocked it
 
@@ -246,16 +287,82 @@ rows, one epoch, seed 17:
 | input embeddings of the option text, **centred**, `--option-shuffle` | 0.434 | 0.6454 | **0.738** |
 
 That matches the classifier that reads `[CLS]` through Exu's layers (0.721).
-Centring is what does it: the three NLI options share almost every word ("the
-hypothesis must be ... given the premise"), so without it the three readout vectors
-are nearly equal and cancel in the softmax, which is the same cancellation that
-blocks the marker scorer.
+Centring is what does it: whatever the options share produces the same logit
+everywhere and cancels in the softmax, which is the same cancellation that blocks
+the marker scorer. Centred and rescaled identities are distinguishable from the
+first step, so the saddle is gone by construction.
 
-Status: **a probe, applied by monkeypatching, not in `src/`.** One seed, one epoch,
-hard-label validation. Not yet measured: ChaosNLI's soft targets, whether it costs
-anything on GoEmotions, more seeds. The two centred variants that read contextual
-states gave the same training loss to four decimals, which may be a bug in that
-probe rather than a result.
+The table above comes from probes applied by monkeypatching. The two centred
+variants that read contextual states gave the same training loss to four decimals,
+which may be a bug in that probe rather than a result.
+
+### The same thing as a real option: `--scorer marker-cls`
+
+Implemented in `src/exu/model.py`, off by default, stored in the checkpoint. Same
+16,000 MultiNLI rows, one epoch, seed 17, `--option-shuffle`, then calibrated and
+tested on ChaosNLI (789 items, 100 annotators each):
+
+| | NLL | Brier | Accuracy | ECE |
+| --- | --- | --- | --- | --- |
+| MultiNLI validation, hard labels | 0.6403 | | 0.752 | 0.035 |
+| ChaosNLI test, uncalibrated | 1.3316 | 0.3000 | 0.494 | 0.194 |
+| ChaosNLI test, temperature 4.05 | 1.0728 | 0.1901 | 0.494 | 0.065 |
+| ChaosNLI bars: `prior` / `uniform` | 1.0993 / 1.0986 | | | |
+
+Order stability 0.996. The hard-label result reproduces the probe. The ChaosNLI rows
+say something else, and it is not flattering: a model trained on single labels is
+badly overconfident on items where 100 people disagree (NLL worse than the uniform
+guess before calibration), and a temperature of 4 only brings it just under the
+bars. The floor of NLL on that split, the mean entropy of the targets, is 0.7457.
+Learning the task and being calibrated on its ambiguous cases are different
+problems, and only the first is solved here.
+
+It does not cost anything where the marker scorer already worked. GoEmotions, 3,000
+rows, one epoch, `--option-shuffle`, seed 17, uncalibrated:
+
+| Scorer | Validation NLL | Test NLL | Test accuracy |
+| --- | --- | --- | --- |
+| `marker` | 2.5154 | 2.4312 | 0.460 |
+| `marker-cls` | 2.3911 | 2.3786 | 0.423 |
+
+One seed and 600 test rows: read it as "no harm", not as a gain.
+
+More runs with the real flag, all `bert-base-uncased`, `--option-shuffle`,
+uncalibrated. NLI rows are one epoch on 16,000 rows, scored on MultiNLI validation.
+BoolQ rows are three epochs, scored on its test split (`prior` NLL 0.663, accuracy
+0.622). Measuring Hate Speech rows are one epoch on 8,000 rows.
+
+| Task | Scorer | Seed | NLL | Accuracy |
+| --- | --- | --- | --- | --- |
+| NLI, balanced | `marker-cls` | 17 / 23 / 42 | 0.6403 / 0.6231 / 0.6282 | 0.752 / 0.739 / 0.753 |
+| NLI, balanced, RLCD mode | `marker-cls` | 17 | 0.6709 | 0.721 |
+| NLI, balanced, bare option names | `marker-cls` | 17 | 0.6319 | 0.747 |
+| BoolQ, natural 62% yes | `marker` | 17 / 23 / 42 | 0.6356 / 0.6282 / 0.7402 | 0.703 / 0.710 / 0.694 |
+| BoolQ, natural 62% yes | `marker-cls` | 17 / 23 / 42 | 0.7770 / 0.5911 / 0.6756 | 0.610 / 0.687 / 0.689 |
+| BoolQ, options `alpha` / `beta` | `marker-cls` | 17 | 0.6043 | 0.679 |
+| BoolQ, balanced training | `marker` | 17 | 0.6931 | 0.598 |
+| BoolQ, balanced training | `marker-cls` | 17 | 0.6235 | 0.656 |
+| Measuring Hate Speech (RPS 0.0556 and 0.0538) | `marker` / `marker-cls` | 17 | 1.0761 / 1.0745 | 0.592 / 0.598 |
+
+What it adds up to:
+
+- `marker-cls` holds across seeds on NLI, works in RLCD mode, and does not need the
+  option descriptions.
+- Where `marker` does learn, it is as good or slightly better and steadier: on BoolQ
+  its accuracy is 0.694 to 0.710 across seeds, against 0.610 to 0.689 for
+  `marker-cls`, with NLL mixed. So `marker-cls` is a remedy for one condition, not a
+  new default on this evidence.
+- The `score` kind is unaffected.
+- A practical test for the condition: if the first epoch ends with validation NLL at
+  exactly `log K`, the model is on the saddle.
+
+Inference was exercised on a `marker-cls` checkpoint through `exu-decide`: three
+handwritten premise and hypothesis pairs came out as entailment 0.92, contradiction
+0.93 and neutral 0.72, and reordering the options changed nothing.
+
+Not yet measured: full-size GoEmotions and Measuring Hate Speech with `marker-cls`,
+more than one seed of RLCD mode, and any encoder other than `bert-base-uncased`
+(the ModernBERT run did not fit in the 8 GB card).
 
 ## 6. Encoders, small comparison
 
@@ -266,11 +373,11 @@ uncalibrated. 400 validation rows and 600 test rows, so the noise is large.
 | --- | --- | --- | --- | --- |
 | `answerdotai/ModernBERT-base` | yes | 2.4261 | 2.3788 | 0.418 |
 | `bert-base-uncased` after a short masked-LM run on Wikipedia (fewer than 60 updates) | yes | 2.5545 | 2.4456 | 0.443 |
+| `bert-base-uncased` | yes | 2.5154 | 2.4312 | 0.460 |
 | `bert-base-uncased` | no | 2.5484 | 2.4727 | 0.470 |
 
-ModernBERT runs end to end in Exu and gives the lower NLL here. There is no
-like-for-like `bert-base-uncased` run with shuffling at this size: the second row,
-which is nearly the same model, is the closest. The continued-pretraining row is a
+ModernBERT runs end to end in Exu and gives the lower NLL here, 2.43 against 2.52
+on validation with the same settings. The continued-pretraining row is a
 plumbing test of two stages (masked LM first, Exu second), not an attempt at domain
 adaptation: held-out masked-LM loss went from 2.1046 to 1.8156 in that short run.
 
@@ -361,8 +468,9 @@ are 2.8267 and 2.8256: the leak vanishes with large `n`, as expected.
 - How often training puts a prediction below `1e-4`. No instrumentation exists.
 - RLCD with teacher-model soft targets, which is where its authors report gains.
 - Any other encoder at full scale, more epochs, another sigma schedule.
-- The new readout of section 5 on anything but one seed of hard-label MultiNLI.
-- The `noul` kind on real data. Only the fixture exercises it.
+- The `marker-cls` scorer of section 5 beyond one seed, in RLCD mode, or at full
+  size on the datasets where the marker scorer already works.
+- The `noul` kind beyond BoolQ, and BoolQ beyond one question wording.
 - Held-out task families. Every dataset above is a single question, or a few
   questions that all appear in training.
 - The float16 path, which has no `GradScaler`, and any GPU older than Ampere.

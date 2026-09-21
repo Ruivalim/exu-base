@@ -37,6 +37,13 @@ implements is RLCD, and that name belongs to TypeSafe.
   coverage, order robustness and latency percentiles.
 - Portable checkpoint carrying model config, sequence config, temperature map,
   weights and tokenizer, with validated loading.
+- `--scorer marker-cls`: an optional term that crosses each option's text with the
+  `[CLS]` state. The shared marker scorer starts from a symmetric saddle and needs
+  something to tell the options apart: with balanced training labels and no lexical
+  overlap it never leaves the uniform guess (balanced MultiNLI 0.32 accuracy,
+  balanced BoolQ at exactly `log 2`). `marker-cls` breaks the symmetry by
+  construction (0.75 and 0.66 there). Stored in the checkpoint, default unchanged,
+  older checkpoints load as `marker`.
 - Offline inference runtime with batched decisions and two documented confidence
   scales.
 - `exu-decide`: the runtime from the command line. One question written with
@@ -50,6 +57,10 @@ implements is RLCD, and that name belongs to TypeSafe.
 
 Found by an external review before this first release, and fixed here:
 
+- The order-robustness pass permuted `score` questions too. Training never shuffles
+  an ordinal scale, so a correct model was reported as unstable: 0.23 on a
+  five-level dataset, which is chance. Ordinal questions are now left out and
+  counted in `skipped_ordinal`, and `stability` is `null` when nothing is left.
 - The `prior` and `majority` baselines were fitted on the labels they were scored
   against, so a question that occurred once got its own target as its prior: NLL
   0 and accuracy 1, presented as the bar to clear. They are now fitted on
