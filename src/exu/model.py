@@ -15,6 +15,21 @@ Architecture, from the encoder up:
 6. softmax over the valid options of each question, divided by the calibration
    temperature.
 
+The optional ``marker-cls`` scorer adds one term to every option's logit: the dot
+product of a readout vector built from the option's own *text* and the normalised
+``[CLS]`` state. It exists because the marker scorer starts from a symmetric
+saddle. The scorer is shared, so at the start every option gets nearly the same
+logit, and the gradient that reaches anything the options have in common is
+``sum_k (q_k - y_k) * c = 0``. Something has to make the options distinguishable
+first. A skewed label prior does it (there is an immediate reward for scoring the
+frequent option higher), and so does lexical overlap between an option and the
+state. With balanced labels and no such overlap nothing does, and the model stays
+at the uniform guess for as long as it is trained. Measured: MultiNLI with
+balanced classes stays at 0.32 accuracy and reaches 0.69 when only the training
+labels are skewed, and BoolQ learns at its natural 62% of yes and collapses to
+``log 2`` when the training split is balanced. ``marker-cls`` breaks the symmetry
+by construction, and learns in all four cases. See `BENCHMARKS.md`.
+
 There is also an action head: CLS plus four distribution statistics (max
 probability, top-two margin, normalized entropy, option fraction) predicting
 whether to act or escalate. It is trained only if you supply action labels;
@@ -35,6 +50,7 @@ if TYPE_CHECKING:
     from transformers import PreTrainedModel
 
 DEFAULT_ENCODER = "google-bert/bert-base-multilingual-cased"
+SCORERS = ("marker", "marker-cls")
 
 
 def masked_softmax(
@@ -88,6 +104,53 @@ def masked_log_softmax(
     return torch.log_softmax(scaled, dim=-1).masked_fill(~mask, 0.0)
 
 
+def option_text_embeddings(
+    token_embeddings: Tensor, input_ids: Tensor, marker_positions: Tensor
+) -> Tensor:
+    """Mean embedding of each option's own text tokens, shape ``(batch, options, hidden)``.
+
+    An option is laid out as ``[MASK] text [SEP]``, so its text runs from the token
+    after its marker to the separator that closes it. The separator id is read off
+    the sequence itself, as the token that closes the first option: a question has
+    at least two options, and this keeps the model free of any tokenizer.
+
+    Pass *input* embeddings. They are the same vector in every example, which is
+    what makes them an identity for the option. The contextual state at the marker
+    changes with the example and was measured not to work for this.
+
+    Rows of padded options come back with whatever their placeholder marker points
+    at. The caller masks them.
+    """
+    steps = torch.arange(input_ids.size(1), device=input_ids.device).view(1, 1, -1)
+    after = steps > marker_positions.unsqueeze(-1)
+    separator = input_ids.gather(1, (marker_positions[:, 1:2] - 1).clamp_min(0))
+    closes = (input_ids.unsqueeze(1) == separator.unsqueeze(-1)) & after
+    closing = closes.to(torch.int8).argmax(dim=-1)
+    # Prefix sums keep the memory at (batch, length, hidden) however many options
+    # there are, where a (batch, options, length, hidden) mask would not.
+    running = token_embeddings.float().cumsum(dim=1)
+    width = running.size(-1)
+    upto_closing = running.gather(1, (closing - 1).clamp_min(0).unsqueeze(-1).expand(-1, -1, width))
+    upto_marker = running.gather(1, marker_positions.unsqueeze(-1).expand(-1, -1, width))
+    length = (closing - marker_positions - 1).clamp_min(1).unsqueeze(-1)
+    return (upto_closing - upto_marker) / length
+
+
+def centre_options(identity: Tensor, option_mask: Tensor) -> Tensor:
+    """Subtract what the valid options of a question share, then rescale.
+
+    Whatever is common to all options of a question produces the same logit
+    everywhere and cancels in the softmax. Options usually share a lot (the same
+    words in their descriptions, the same average embedding), so without this step
+    the readout vectors are nearly equal and the symmetry this scorer exists to
+    break is still there. Measured on MultiNLI: 0.32 accuracy without it, 0.74
+    with it.
+    """
+    weight = option_mask.unsqueeze(-1).to(identity.dtype)
+    mean = (identity * weight).sum(dim=1, keepdim=True) / weight.sum(dim=1, keepdim=True)
+    return torch.nn.functional.layer_norm((identity - mean) * weight, identity.shape[-1:])
+
+
 @dataclass(frozen=True, slots=True)
 class ActionCosts:
     """Cost matrix for act-or-escalate, expressed as a business rule.
@@ -139,10 +202,13 @@ class ExuConfig:
     dropout: float = 0.1
     temperature: float = 1.0
     action_costs: ActionCosts = field(default_factory=ActionCosts)
+    scorer: str = "marker"
 
     def __post_init__(self) -> None:
         if self.num_decision_layers < 1:
             raise ValueError("num_decision_layers must be positive")
+        if self.scorer not in SCORERS:
+            raise ValueError(f"scorer must be one of {SCORERS}")
         if not self.temperature > 0:
             raise ValueError("temperature must be positive")
         if not 0 <= self.dropout < 1:
@@ -155,6 +221,7 @@ class ExuConfig:
             "dropout": self.dropout,
             "temperature": self.temperature,
             "action_costs": self.action_costs.to_dict(),
+            "scorer": self.scorer,
         }
 
     @classmethod
@@ -168,6 +235,8 @@ class ExuConfig:
             dropout=float(data.get("dropout", 0.1)),  # type: ignore[arg-type]
             temperature=float(data.get("temperature", 1.0)),  # type: ignore[arg-type]
             action_costs=ActionCosts.from_dict(raw_costs),  # type: ignore[arg-type]
+            # Checkpoints written before the option existed read at the markers only.
+            scorer=str(data.get("scorer", "marker")),
         )
 
 
@@ -215,6 +284,9 @@ class ExuModel(nn.Module):
             nn.GELU(),
             nn.Linear(hidden_size, 1),
         )
+        if self.config.scorer == "marker-cls":
+            self.option_readout = nn.Linear(hidden_size, hidden_size, bias=False)
+            self.summary_norm = nn.LayerNorm(hidden_size)
         self.action_head = nn.Sequential(
             nn.LayerNorm(hidden_size + 4),
             nn.Linear(hidden_size + 4, hidden_size // 2),
@@ -251,6 +323,12 @@ class ExuModel(nn.Module):
         indices = marker_positions.unsqueeze(-1).expand(-1, -1, hidden.size(-1))
         marker_hidden = hidden.gather(1, indices)
         logits = self.scorer(marker_hidden).squeeze(-1)
+        if self.config.scorer == "marker-cls":
+            words = self.encoder.get_input_embeddings()(input_ids)
+            identity = option_text_embeddings(words, input_ids, marker_positions)
+            readout = self.option_readout(centre_options(identity, option_mask.bool()))
+            summary = self.summary_norm(hidden[:, 0].float()).unsqueeze(1)
+            logits = logits + (readout * summary).sum(dim=-1) / hidden.size(-1) ** 0.5
         masked_logits = logits.masked_fill(~option_mask.bool(), torch.finfo(logits.dtype).min)
         chosen = self.config.temperature if temperature is None else temperature
         probabilities = masked_softmax(masked_logits, option_mask, chosen)

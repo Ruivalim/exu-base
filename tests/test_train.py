@@ -186,3 +186,26 @@ def test_sigma_reaches_sigma_end_on_the_last_update(tmp_path) -> None:
     assert code == 0
     summary = json.loads((output / "training.json").read_text(encoding="utf-8"))
     assert summary["train_epochs"][-1]["sigma_end"] == pytest.approx(0.2)
+
+
+def test_the_scorer_choice_is_recorded_and_reloads(tmp_path) -> None:
+    encoder = _encoder_dir(tmp_path)
+    output = tmp_path / "marker-cls"
+    arguments = _common(tmp_path, encoder, output)
+
+    code = main([*arguments, "--mode", "baseline", "--epochs", "1", "--scorer", "marker-cls"])
+
+    assert code == 0
+    summary = json.loads((output / "training.json").read_text(encoding="utf-8"))
+    assert summary["scorer"] == "marker-cls"
+    restored = load_checkpoint(output)
+    assert restored.model_config.scorer == "marker-cls"
+    assert any(key.startswith("option_readout") for key in restored.model.state_dict())
+
+
+def test_the_default_scorer_is_the_marker_one(tmp_path) -> None:
+    assert build_parser().get_default("scorer") == "marker"
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(
+            ["--train", "a", "--validation", "b", "--output", "c", "--scorer", "x"]
+        )

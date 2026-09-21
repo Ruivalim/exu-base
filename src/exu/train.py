@@ -32,7 +32,7 @@ from .checkpoint import save_checkpoint
 from .data import DecisionDataset, TrainingBatch, load_jsonl
 from .devices import autocast_context, resolve_device
 from .evaluation import collect, metrics_for
-from .model import ExuConfig, ExuModel, masked_log_softmax
+from .model import SCORERS, ExuConfig, ExuModel, masked_log_softmax
 from .policy import PolicyConfig, policy_gradient_loss, sigma_for
 from .scoring import proper_scoring_loss, reward_definition
 from .sequence import SequenceBuilder, SequenceConfig
@@ -59,6 +59,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, type=Path, help="new checkpoint directory")
     parser.add_argument("--encoder", default=ExuConfig().encoder_name)
     parser.add_argument("--mode", choices=("baseline", "rlcd"), default="rlcd")
+    parser.add_argument(
+        "--scorer",
+        choices=SCORERS,
+        default="marker",
+        help="marker reads each option at its marker. marker-cls adds a term that "
+        "crosses the option's text with [CLS], for answers the option names do not hint at",
+    )
     parser.add_argument("--epochs", type=_positive_int, default=4)
     parser.add_argument("--batch-size", type=_positive_int, default=8)
     parser.add_argument("--grad-accum", type=_positive_int, default=1)
@@ -146,7 +153,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         _loader(DecisionDataset(test_examples, builder), args.batch_size) if test_examples else None
     )
 
-    model = ExuModel.from_pretrained(ExuConfig(encoder_name=args.encoder)).to(device)
+    model = ExuModel.from_pretrained(ExuConfig(encoder_name=args.encoder, scorer=args.scorer)).to(
+        device
+    )
     optimizer = AdamW(
         [
             {"params": model.encoder.parameters(), "lr": args.encoder_lr},
@@ -245,6 +254,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "device": str(device),
         "mode": args.mode,
         "encoder": args.encoder,
+        "scorer": args.scorer,
         "epochs": args.epochs,
         "batch_size": args.batch_size,
         "grad_accum": args.grad_accum,

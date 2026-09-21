@@ -125,6 +125,12 @@ uv run exu-train \
   armadilha que faz a calibração parecer melhor do que é.
 - `--option-shuffle` permuta as opções de uma pergunta a cada passada. Sem isso o
   modelo aprende posição em vez de critério.
+- `--scorer marker-cls` é para dado de treino com **rótulos balanceados e sem
+  sobreposição lexical** entre as opções e o estado. Ali o scorer default, `marker`,
+  nunca sai do chute uniforme (NLL de validação preso exatamente em `log K`): o
+  MultiNLI balanceado ficou em 0.32 de accuracy onde o `marker-cls` chegou a 0.75.
+  Se a primeira época terminar em `log K`, é esta a flag a tentar. A escolha fica
+  gravada no checkpoint, então a inferência não precisa de flag.
 - `--device` é `auto` por padrão: CUDA, depois MPS, depois CPU.
 
 Botões úteis, com os defaults: `--epochs 4`, `--batch-size 8`, `--grad-accum 1`,

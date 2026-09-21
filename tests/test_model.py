@@ -7,7 +7,15 @@ import torch
 from helpers import tiny_encoder, tiny_model, tiny_tokenizer
 
 from exu import DecisionQuestion, Option
-from exu.model import ActionCosts, ExuConfig, ExuModel, masked_log_softmax, masked_softmax
+from exu.model import (
+    ActionCosts,
+    ExuConfig,
+    ExuModel,
+    centre_options,
+    masked_log_softmax,
+    masked_softmax,
+    option_text_embeddings,
+)
 from exu.sequence import SequenceBuilder
 
 
@@ -182,3 +190,131 @@ def test_config_rejects_invalid_values() -> None:
 def test_model_rejects_a_hidden_size_without_room_for_heads() -> None:
     with pytest.raises(ValueError, match="hidden size"):
         ExuModel(tiny_encoder(hidden_size=65), ExuConfig(num_decision_layers=1))
+
+
+def _cls_model(hidden_size: int = 64) -> ExuModel:
+    config = ExuConfig(
+        encoder_name="tiny-bert", num_decision_layers=1, dropout=0.0, scorer="marker-cls"
+    )
+    return ExuModel(tiny_encoder(hidden_size=hidden_size), config)
+
+
+def test_the_default_scorer_adds_no_weights() -> None:
+    keys = tiny_model().state_dict()
+
+    assert tiny_model().config.scorer == "marker"
+    assert not any(key.startswith(("option_readout", "summary_norm")) for key in keys)
+    assert any(key.startswith("option_readout") for key in _cls_model().state_dict())
+
+
+def test_an_unknown_scorer_is_refused() -> None:
+    with pytest.raises(ValueError, match="scorer"):
+        ExuConfig(scorer="cls")
+
+
+def test_the_scorer_survives_a_config_round_trip() -> None:
+    assert ExuConfig.from_dict(ExuConfig(scorer="marker-cls").to_dict()).scorer == "marker-cls"
+    # A checkpoint written before the option existed has no such key.
+    assert ExuConfig.from_dict({"encoder_name": "x"}).scorer == "marker"
+
+
+def test_option_text_embeddings_pool_exactly_the_tokens_of_each_option(builder) -> None:
+    tokenizer = tiny_tokenizer()
+    two = DecisionQuestion.noul("is it urgent", "no", "yes")
+    three = DecisionQuestion.choice(
+        "where should this ticket go",
+        [
+            Option("billing", "payment invoice or refund"),
+            Option("support", "access or outage"),
+            Option("security"),
+        ],
+    )
+    pairs = [("payment failed twice today", two), ("the login page is down", three)]
+    batch = _batch(builder, pairs)
+    table = torch.randn(tokenizer.vocab_size, 8, generator=torch.Generator().manual_seed(0))
+
+    pooled = option_text_embeddings(
+        table[batch["input_ids"]], batch["input_ids"], batch["marker_positions"]
+    )
+
+    assert pooled.shape == (2, 3, 8)
+    for row, (_state, question) in enumerate(pairs):
+        for index, option in enumerate(question.options):
+            ids = tokenizer.encode(option.render(), add_special_tokens=False)
+            assert torch.allclose(pooled[row, index], table[ids].mean(dim=0), atol=1e-6)
+
+
+def test_centring_removes_what_the_options_share() -> None:
+    # Options of one question often share most of their words. Whatever is common
+    # to all of them cancels in the softmax, so only the difference may get through.
+    generator = torch.Generator().manual_seed(1)
+    identity = torch.randn(2, 3, 8, generator=generator)
+    mask = torch.tensor([[True, True, False], [True, True, True]])
+    shared = torch.randn(2, 1, 8, generator=generator) * 50
+
+    plain = centre_options(identity, mask)
+    shifted = centre_options(identity + shared, mask)
+
+    assert torch.allclose(plain[mask], shifted[mask], atol=1e-4)
+    assert torch.allclose(plain[mask].mean(dim=-1), torch.zeros(5), atol=1e-5)
+    assert torch.isfinite(plain).all()
+
+
+def test_centring_ignores_padded_options() -> None:
+    identity = torch.randn(1, 3, 8, generator=torch.Generator().manual_seed(2))
+    mask = torch.tensor([[True, True, False]])
+    noisy = identity.clone()
+    noisy[0, 2] = 1e6
+
+    assert torch.allclose(
+        centre_options(identity, mask)[mask], centre_options(noisy, mask)[mask], atol=1e-5
+    )
+
+
+def test_marker_cls_scores_mixed_option_counts(builder) -> None:
+    two = DecisionQuestion.noul("Is it fraud?")
+    three = DecisionQuestion.choice("Route", [Option("A"), Option("B"), Option("C")])
+    batch = _batch(builder, [("payment failed", two), ("payment failed", three)])
+
+    output = _cls_model().eval()(**batch)
+
+    assert output.probabilities.shape == (2, 3)
+    assert output.probabilities[0, 2].item() == 0
+    assert torch.isfinite(output.probabilities).all()
+    assert torch.allclose(output.probabilities.sum(dim=-1), torch.ones(2))
+
+
+def test_marker_cls_trains_its_own_weights_and_the_word_embeddings(builder) -> None:
+    three = DecisionQuestion.choice("Route", [Option("billing"), Option("support"), Option("risk")])
+    batch = _batch(builder, [("payment failed", three)])
+    model = _cls_model()
+
+    model(**batch).logits[0, 1].backward()
+
+    assert model.option_readout.weight.grad.abs().sum() > 0
+    assert model.summary_norm.weight.grad.abs().sum() > 0
+    assert model.encoder.get_input_embeddings().weight.grad.abs().sum() > 0
+
+
+def test_marker_cls_learns_a_balanced_task_with_no_lexical_cue(builder) -> None:
+    # Balanced labels, and options ("0" and "1") that share nothing with the state:
+    # nothing here tells the options apart for a shared marker scorer, which is the
+    # setting where it sat at the uniform guess on real data (balanced MultiNLI,
+    # balanced BoolQ). The centred option identities break that symmetry.
+    torch.manual_seed(0)
+    question = DecisionQuestion.choice("which one", [Option("0"), Option("1")])
+    states = ["payment refund invoice", "login password locked", "invoice charged twice"]
+    states += ["account access blocked"]
+    labels = torch.tensor([0, 1, 0, 1])
+    batch = _batch(builder, [(state, question) for state in states])
+    model = _cls_model()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+    for _ in range(60):
+        optimizer.zero_grad()
+        logits = model(**batch).logits
+        torch.nn.functional.cross_entropy(logits, labels).backward()
+        optimizer.step()
+
+    model.eval()
+    assert model(**batch).logits.argmax(dim=-1).tolist() == labels.tolist()

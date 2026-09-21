@@ -162,6 +162,33 @@ Em cima do encoder, treinada do zero:
    negativo.
 6. Softmax sobre as opções de cada pergunta.
 
+`--scorer marker-cls` soma um termo ao logit de cada opção, e deixa o resto como
+está:
+
+```
+logit_k += < W e_k , LayerNorm(h_cls) > / sqrt(H)
+```
+
+`e_k` é a média dos embeddings de *entrada* dos tokens do texto da própria opção,
+centrada entre as opções da pergunta e reescalada.
+
+Ele existe porque o scorer de marcador parte de uma sela simétrica. O scorer é
+compartilhado, então no começo toda opção recebe quase o mesmo logit, e o gradiente
+que chega a qualquer coisa que as opções têm em comum é `soma_k (q_k - y_k) * c = 0`.
+Alguma coisa precisa tornar as opções distinguíveis primeiro. Um prior de rótulos
+desbalanceado faz isso, porque dar logit maior à opção frequente rende na hora.
+Sobreposição lexical entre a opção e o estado também ("gratitude" e "thank you").
+Com **rótulos balanceados e sem essa sobreposição** nada faz, e o modelo fica no
+chute uniforme por mais que treine. Medido: o MultiNLI com classes balanceadas fica
+em 0.32 de accuracy e chega a 0.69 quando só os rótulos de treino são
+desbalanceados, e o BoolQ aprende com os 62% naturais de "yes" e colapsa para
+`log 2` quando o treino é balanceado. O `marker-cls` quebra a simetria por
+construção e aprende nos quatro casos (0.75 no MultiNLI balanceado). Dois detalhes
+carregam isso: a opção é identificada por embeddings de entrada, iguais em todo
+exemplo, e as identidades são centradas, porque o que as opções compartilham cancela
+no softmax. Números no `BENCHMARKS.md`. O default continua `marker`, que foi igual
+ou um pouco melhor onde ele aprende.
+
 Ordem de grandeza: a cabeça extra tem dezenas de milhões de parâmetros, o scorer
 cerca de um milhão, contra centenas de milhões no encoder. O encoder não fica
 congelado: ele recebe fine-tune completo, com taxa de aprendizado menor que a da

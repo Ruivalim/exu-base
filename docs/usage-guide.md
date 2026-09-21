@@ -122,6 +122,12 @@ uv run exu-train \
   trap that makes calibration look better than it is.
 - `--option-shuffle` permutes a question's options every pass. Without it the
   model learns position instead of criteria.
+- `--scorer marker-cls` is for training data with **balanced labels and no lexical
+  overlap** between the options and the state. There the default `marker` scorer
+  never leaves the uniform guess (validation NLL stuck at exactly `log K`): balanced
+  MultiNLI stayed at 0.32 accuracy where `marker-cls` reached 0.75. If the first
+  epoch ends at `log K`, this is the flag to try. The choice is stored in the
+  checkpoint, so inference needs no flag.
 - `--device` defaults to `auto`: CUDA, then MPS, then CPU.
 
 Useful knobs, with their defaults: `--epochs 4`, `--batch-size 8`,

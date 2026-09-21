@@ -156,6 +156,33 @@ On top of the encoder, trained from scratch:
 5. Options that exist only because of batch padding get a very negative logit.
 6. Softmax over each question's options.
 
+`--scorer marker-cls` adds one term to every option's logit, and leaves the rest as
+it is:
+
+```
+logit_k += < W e_k , LayerNorm(h_cls) > / sqrt(H)
+```
+
+`e_k` is the mean of the *input* embeddings of the option's own text tokens, centred
+across the options of the question and rescaled.
+
+It exists because the marker scorer starts from a symmetric saddle. The scorer is
+shared, so at the start every option gets nearly the same logit, and the gradient
+that reaches anything the options have in common is `sum_k (q_k - y_k) * c = 0`.
+Something has to make the options distinguishable first. A skewed label prior does
+it, because scoring the frequent option higher pays at once. Lexical overlap
+between an option and the state does it too ("gratitude" and "thank you"). With
+**balanced labels and no such overlap** nothing does, and the model stays at the
+uniform guess however long it trains. Measured: MultiNLI with balanced classes
+stays at 0.32 accuracy and reaches 0.69 when only its training labels are skewed,
+and BoolQ learns at its natural 62% of yes and collapses to `log 2` when its
+training split is balanced. `marker-cls` breaks the symmetry by construction and
+learns in all four cases (0.75 on balanced MultiNLI). Two details carry it: the
+option is identified by input embeddings, which are the same in every example, and
+the identities are centred, because what the options share cancels in the softmax.
+Numbers in `BENCHMARKS.md`. The default is still `marker`, which was as good or
+slightly better where it does learn.
+
 Order of magnitude: the extra head is tens of millions of parameters, the scorer
 about one million, against hundreds of millions in the encoder. The encoder is not
 frozen: it receives a full fine-tune with a lower learning rate than the head.
