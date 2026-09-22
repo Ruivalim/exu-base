@@ -98,7 +98,7 @@ exu-train \
 same strictly proper score directly, with no sampling. Train the baseline first:
 it is the bar the RLCD mode has to beat on held-out NLL. So far it has not been
 beaten: in every comparison measured on real data (eight, across three backbones
-and four datasets, see BENCHMARKS.md) the direct baseline was as good or better,
+and three datasets, see BENCHMARKS.md) the direct baseline was as good or better,
 and RLCD made confident misses ten to a hundred times more often. Start with
 `--mode baseline`; treat `--mode rlcd` as the method under evaluation, not the
 default. The setting its authors report gains in, soft targets from a teacher
