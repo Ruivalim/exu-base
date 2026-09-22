@@ -122,12 +122,15 @@ uv run exu-train \
   trap that makes calibration look better than it is.
 - `--option-shuffle` permutes a question's options every pass. Without it the
   model learns position instead of criteria.
-- `--scorer marker-cls` is for training data with **balanced labels and no lexical
-  overlap** between the options and the state. There the default `marker` scorer
-  never leaves the uniform guess (validation NLL stuck at exactly `log K`): balanced
-  MultiNLI stayed at 0.32 accuracy where `marker-cls` reached 0.75. If the first
-  epoch ends at `log K`, this is the flag to try. The choice is stored in the
-  checkpoint, so inference needs no flag.
+- `--scorer marker-cls` is for training data with **balanced labels**. There the
+  default `marker` scorer can sit on the uniform guess for the whole run
+  (validation NLL at exactly `log K`): balanced MultiNLI stayed at 0.34 accuracy on
+  every seed and encoder tried, where `marker-cls` reached 0.75 with BERT and 0.87
+  with ModernBERT; balanced BoolQ stayed at `log 2`. If the first epoch ends at
+  `log K`, this is the flag to try. Where `marker` does learn, `marker-cls` costs
+  NLL (0.056 on GoEmotions, 0.021 on Measuring Hate Speech, three seeds each), so
+  it is a remedy, not a default. The choice is stored in the checkpoint, so
+  inference needs no flag.
 - `--device` defaults to `auto`: CUDA, then MPS, then CPU.
 
 Useful knobs, with their defaults: `--epochs 4`, `--batch-size 8`,

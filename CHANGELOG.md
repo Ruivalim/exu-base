@@ -7,7 +7,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-09-19
+## [0.1.0] - 2026-09-22
 
 First public release, under the name Exu. It is a toolkit: the training method it
 implements is RLCD, and that name belongs to TypeSafe.
@@ -50,6 +50,10 @@ implements is RLCD, and that name belongs to TypeSafe.
   have, so how often that floor acted is now a measurement.
 - Offline inference runtime with batched decisions and two documented confidence
   scales.
+- `scripts/runpod_gpu.py`: rent one GPU pod on RunPod for a training run, send
+  the tree and the data, run a job with a time limit and an automatic stop, bring
+  the reports back, and give the pod back. Standard library only; the API key is
+  never written or printed. Every guard in it was earned on a real pod.
 - `exu-decide`: the runtime from the command line. One question written with
   flags, or a JSONL batch from a file or stdin, one JSON object per question. The
   input is validated whole before anything is answered. `--top-only` keeps the

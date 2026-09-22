@@ -96,7 +96,13 @@ exu-train \
 
 `--mode rlcd` uses the perturbed-logit policy. `--mode baseline` optimizes the
 same strictly proper score directly, with no sampling. Train the baseline first:
-it is the bar the RLCD mode has to beat on held-out ECE or NLL.
+it is the bar the RLCD mode has to beat on held-out NLL. So far it has not been
+beaten: in every comparison measured on real data (eight, across three backbones
+and four datasets, see BENCHMARKS.md) the direct baseline was as good or better,
+and RLCD made confident misses ten to a hundred times more often. Start with
+`--mode baseline`; treat `--mode rlcd` as the method under evaluation, not the
+default. The setting its authors report gains in, soft targets from a teacher
+model, has not been tested here.
 
 The step-by-step version, from writing the records to reading the report and the
 failure modes, is [docs/usage-guide.md](https://github.com/ruivalim/exu-base/blob/main/docs/usage-guide.md).
