@@ -723,6 +723,9 @@ About 61 minutes per epoch on an RTX 5090 (97 on a slower host).
 | `bert-base-uncased` `marker`, 3 epochs, 3 seeds (section 9) | 3 | 1.8676 ± 0.0076 | 0.2195 | 0.5514 | 0.110 | |
 | `ModernBERT-base` `marker`, 3 epochs, 3 seeds (section 9) | 3 | 1.8549 ± 0.0119 | 0.2174 | 0.5542 | 0.102 | |
 
+- The seed 17 `sft` weights are published at
+  [Ruivalim/exu-qwen3-0.6b-goemotions](https://huggingface.co/Ruivalim/exu-qwen3-0.6b-goemotions)
+  with a standalone runtime and a model card. The package does not load them.
 - One epoch of the decoder on the full split is the best GoEmotions number
   measured so far, and it holds across seeds: 1.8417 ± 0.0019, against 1.8676 ±
   0.0076 for BERT and 1.8549 ± 0.0119 for ModernBERT, each trained for three

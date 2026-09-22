@@ -208,6 +208,11 @@ Small synthetic fixtures are for plumbing only. They are not evidence of quality
 Every run on real data so far, with datasets, encoders, seeds and the results that
 did not go RLCD's way, is in
 [BENCHMARKS.md](https://github.com/ruivalim/exu-base/blob/main/BENCHMARKS.md).
+One model from those runs is published as an example,
+[exu-qwen3-0.6b-goemotions](https://huggingface.co/Ruivalim/exu-qwen3-0.6b-goemotions):
+a Qwen3-0.6B body with a decision head, trained with the direct objective on
+GoEmotions. It comes with its own one-file runtime and a card that says what it is
+and is not; this package does not load that format yet.
 
 ## Prior art
 
