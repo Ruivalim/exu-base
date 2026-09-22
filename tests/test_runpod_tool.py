@@ -253,6 +253,25 @@ def test_the_pod_gets_rsync_before_the_first_transfer() -> None:
     assert prepare.index("command -v rsync") < prepare.index("apt-get install")
 
 
+def test_setup_refuses_to_start_a_second_install() -> None:
+    # Found on a real pod: three interrupted setups left three `uv sync` running at
+    # once, the environment took ten billed minutes and was still not ready.
+    setup = runpod_gpu.setup_remote()
+
+    assert setup.index("pgrep") < setup.index("uv sync --frozen")
+    assert "exit 3" in setup
+    # Six hosts in a row once passed nvidia-smi and failed CUDA init; the job then
+    # crawled on the CPU at full price. Setup has to fail there, not print False.
+    assert "assert torch.cuda.is_available()" in setup
+
+
+def test_setup_is_told_apart_from_its_own_guard(tmp_path) -> None:
+    # The guard greps for `uv sync --frozen`; it must not match the guard's own shell.
+    done = subprocess.run(["bash", "-c", "pgrep -x -f 'uv sync --frozen'; echo rc=$?"],
+                          capture_output=True, text=True)  # fmt: skip
+    assert "rc=1" in done.stdout, "nothing is installing here, so the guard must pass"
+
+
 def test_the_file_list_leaves_out_weights_and_keys(tmp_path) -> None:
     listed = [
         "src/exu/model.py",

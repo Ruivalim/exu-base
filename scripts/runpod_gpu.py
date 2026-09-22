@@ -20,8 +20,11 @@ has to be registered in the RunPod account: the official images install it.
 Money guards, because a forgotten pod bills until someone notices:
 
 - `up` refuses without credit, and refuses a second pod while one is recorded;
-- the pod is recorded in artifacts/runpod/pod.json (git-ignored), so `down` always
-  knows what to terminate, and the record is only dropped once the API confirms;
+- the pod is recorded in artifacts/runpod/<name>.json (git-ignored), so `down` always
+  knows what to terminate, and the record is only dropped once the API confirms.
+  `--pod NAME` (default `pod`) addresses one of several pods, each with its record;
+- `setup` refuses to run while an install is already running on the pod: a second
+  one competes with the first and neither finishes for a long time;
 - `run` wraps the job in `timeout`, and stops the pod a grace period after the job
   ends, so there is time to `fetch` and `down`. Fetch inside that window: a stopped
   pod keeps its volume and bills storage only, but it has no ssh, and `start` fails
@@ -51,7 +54,8 @@ from typing import Any
 API = "https://rest.runpod.io/v1"
 GRAPHQL = "https://api.runpod.io/graphql"
 KEY_FILE = Path("~/.config/exu/runpod.key").expanduser()
-STATE = Path("artifacts/runpod/pod.json")
+STATE_DIR = Path("artifacts/runpod")
+STATE = STATE_DIR / "pod.json"
 REMOTE_DIR = "/workspace/exu"
 # The image of the most used official template: hosts already have it, and a pod was
 # up in 18 seconds. A tag republished that day took 14 billed minutes to pull. Its own
@@ -166,6 +170,19 @@ def _ssh_options(endpoint: tuple[str, int], identity: Path) -> str:
     return (
         f"ssh -p {endpoint[1]} -i {identity} -o StrictHostKeyChecking=accept-new "
         "-o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+    )
+
+
+def setup_remote() -> str:
+    """Install uv and the locked environment, unless an install is already running."""
+    return (
+        "if pgrep -x -f 'uv sync --frozen' > /dev/null; then "
+        'echo "an install is already running on the pod: wait for it" >&2; exit 3; fi; '
+        "command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh; "
+        f'export PATH="$HOME/.local/bin:$PATH"; cd {REMOTE_DIR} && uv sync --frozen && '
+        'uv run python -c "import torch; print(torch.__version__, torch.cuda.is_available()); '
+        "assert torch.cuda.is_available(), 'CUDA does not initialise on this host: down and rent again'; "
+        'print(torch.cuda.get_device_name(0))"'
     )
 
 
@@ -355,6 +372,8 @@ def _ssh(endpoint: tuple[str, int], identity: Path, command: str) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Rent a GPU on RunPod and give it back.")
     parser.add_argument("--identity", type=Path, default=Path("~/.ssh/id_rsa").expanduser())
+    parser.add_argument("--pod", default="pod",
+                        help="which pod this command acts on; each has its own record")  # fmt: skip
     actions = parser.add_subparsers(dest="action", required=True)
     actions.add_parser("status", help="balance, recorded pod, every pod on the account")
     offers = actions.add_parser("offers", help="GPUs in stock, with a download-speed floor")
@@ -390,9 +409,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     actions.add_parser("down", help="terminate the pod and drop the record")
     args = parser.parse_args(argv)
 
-    pods = RunPod(load_key())
+    pods = RunPod(load_key(), state=STATE_DIR / f"{args.pod}.json")
     if args.action == "status":
-        print(f"balance: ${pods.balance():.2f} | recorded pod: {pods.recorded()}")
+        recorded = {path.stem: json.loads(path.read_text(encoding="utf-8")).get("id")
+                    for path in sorted(STATE_DIR.glob("*.json"))}  # fmt: skip
+        print(f"balance: ${pods.balance():.2f} | recorded: {recorded or None}")
         for pod in pods.list():
             print(f"  {pod['id']}  {pod.get('desiredStatus')}  ${pod.get('costPerHr')}/h  "
                   f"{(pod.get('machine') or {}).get('gpuTypeId')}  {pod.get('name')}")  # fmt: skip
@@ -441,11 +462,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise SystemExit("could not prepare the pod: no folder, or no rsync")
             return subprocess.call(rsync_push(endpoint, args.identity, manifest.name))
     if args.action == "setup":
-        install = ("command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh; "
-                   f'export PATH="$HOME/.local/bin:$PATH"; cd {REMOTE_DIR} && uv sync --frozen && '
-                   "uv run python -c \"import torch; print(torch.__version__, "
-                   "torch.cuda.is_available(), torch.cuda.get_device_name(0))\"")  # fmt: skip
-        return _ssh(endpoint, args.identity, install)
+        return _ssh(endpoint, args.identity, setup_remote())
     if args.action == "run":
         command = f'export PATH="$HOME/.local/bin:$PATH"; {args.command}'
         script = remote_job(command, max_hours=args.max_hours, stop_after=not args.keep_running,
