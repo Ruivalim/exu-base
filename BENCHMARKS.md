@@ -567,8 +567,22 @@ baseline (0.878 and 0.864 validation accuracy).
 
 Put next to sections 1 and 4, that is five comparisons: RLCD loses on GoEmotions
 with both encoders, ties on Measuring Hate Speech with both, and is unstable on NLI.
-It has not won one yet. The setting its authors report gains in, teacher-model soft
-targets, is still untested.
+It has not won one yet, and section 10 adds three more with a decoder, none won.
+
+Where that leaves the method. In every comparison here the target distribution was
+in hand, from human raters. In that setting the direct objective is the optimal
+estimator by construction: a strictly proper score is maximised by the truth, and
+its gradient points at it. The policy gradient is a noisy estimate of that same
+gradient with the bias of the sigma-smoothed optimum on top (section 8), so at best
+it ties, and the confident-miss rates say it does not reach the tie. The setting in
+which a policy gradient earns its place is the one with no target, only a reward
+per sampled answer: a judge, a preference, a teacher model. That is the setting the
+method's authors report gains in, and nothing here tests it. Scale is not the
+missing piece on its own: the gap did not shrink from 16,000 to 46,370 rows, nor
+from 110M to 600M parameters. What scale can change is the availability of such
+targets. A cheap test is in the working notes: a language model as teacher on a few
+thousand GoEmotions comments, both modes trained against its distribution, scored
+against the raters.
 
 ### Encoders at full size
 
