@@ -5,7 +5,7 @@ a published result of someone else, and nothing is tuned to look good: the proje
 is pre-alpha, the runs are small, and several of them say the toolkit's headline
 method loses to its own baseline.
 
-Last updated 2026-09-21.
+Last updated 2026-09-22.
 
 ## How to read this file
 
@@ -30,6 +30,7 @@ Last updated 2026-09-21.
 | | |
 | --- | --- |
 | Training machine | 2x NVIDIA RTX 3060 12 GB, one job per GPU |
+| Rented machine, section 9 | 1x NVIDIA RTX 5090 32 GB, up to four jobs sharing the card |
 | Probe machine | 1x NVIDIA RTX 4060 8 GB, shared with a desktop session |
 | Precision | bfloat16 autocast, log term of the reward always in float32 |
 | Main encoder | `google-bert/bert-base-uncased` |
@@ -360,9 +361,9 @@ Inference was exercised on a `marker-cls` checkpoint through `exu-decide`: three
 handwritten premise and hypothesis pairs came out as entailment 0.92, contradiction
 0.93 and neutral 0.72, and reordering the options changed nothing.
 
-Not yet measured: full-size GoEmotions and Measuring Hate Speech with `marker-cls`,
-more than one seed of RLCD mode, and any encoder other than `bert-base-uncased`
-(the ModernBERT run did not fit in the 8 GB card).
+All of that was later measured at full size with three seeds, and the picture
+sharpened: see section 9. In short, `marker-cls` costs NLL wherever `marker` learns,
+and is the only one of the two that learns where `marker` sits on the saddle.
 
 ## 6. Encoders, small comparison
 
@@ -382,7 +383,8 @@ plumbing test of two stages (masked LM first, Exu second), not an attempt at dom
 adaptation: held-out masked-LM loss went from 2.1046 to 1.8156 in that short run.
 
 A better encoder does not fix section 5: ModernBERT collapses to the uniform guess
-on NLI exactly like BERT.
+on NLI exactly like BERT. Section 9 repeats this with three seeds, and compares the
+two encoders at full size.
 
 ## 7. Inference
 
@@ -463,13 +465,353 @@ labels 0.7230 NLL and 0.25 accuracy, fitted in-sample 0.3466 and 0.75, `uniform`
 `n = 2, 4, 10, 100`. On GoEmotions, with 5,884 rows of one question, the two priors
 are 2.8267 and 2.8256: the leak vanishes with large `n`, as expected.
 
+## 9. Full-size runs on a rented GPU, 2026-09-21
+
+Preliminary, in the sense that nothing here has been rerun. Every block is three
+seeds (17, 23, 42) under the protocol of "Reproducing": `--option-shuffle`, batch 8
+with `--grad-accum 2`, `--calibrate` on the calibration split, test numbers from
+`report.json`. Three epochs, except the NLI blocks, which are one epoch on the
+16,000-row MultiNLI subsample and are tested on ChaosNLI. 45 jobs, none failed.
+
+Code: the current tree, with `--scorer`, the order-robustness skip for `score`
+questions and the confident-miss counter. The Measuring Hate Speech block with
+ModernBERT is the exception: it ran on the 3060s with the tree of sections 1 to 4,
+which has the same training algorithm and no counter.
+
+Hardware note. One job at batch 8 keeps an RTX 5090 at 58% and one CPU core at 100%:
+the Python loop is the limit, not the card. Four jobs sharing the card ran at 13.5
+batches per second each, 54 together against 32 alone, so 1.7 times the throughput.
+A GoEmotions job took 9.8 minutes alone (about 30 on a 3060) and 24.5 minutes with
+three neighbours. The `marker` baseline reproduces across machines: 1.8676 here
+against 1.8633 on the 3060s (section 1).
+
+### `marker` against `marker-cls` where `marker` already learns
+
+`bert-base-uncased`, baseline mode.
+
+| Dataset | Scorer | NLL | Brier | Accuracy | ECE | Order stability |
+| --- | --- | --- | --- | --- | --- | --- |
+| GoEmotions | `marker` | 1.8676 ± 0.0076 | 0.2195 ± 0.0042 | 0.5514 ± 0.0022 | 0.1095 ± 0.0125 | 0.9645 ± 0.0052 |
+| GoEmotions | `marker-cls` | 1.9238 ± 0.0268 | 0.2345 ± 0.0098 | 0.5303 ± 0.0129 | 0.0848 ± 0.0090 | 0.9952 ± 0.0008 |
+| Measuring Hate Speech | `marker` | 1.0515 ± 0.0043 | 0.1942 ± 0.0019 | 0.6162 ± 0.0071 | 0.0820 ± 0.0031 | not applicable |
+| Measuring Hate Speech | `marker-cls` | 1.0726 ± 0.0124 | 0.2044 ± 0.0053 | 0.5867 ± 0.0150 | 0.0855 ± 0.0084 | not applicable |
+
+Bars: GoEmotions `prior` 2.8267, Measuring Hate Speech `prior` 1.2838. On Measuring
+Hate Speech the RPS is 0.0486 ± 0.0010 for `marker` and 0.0531 ± 0.0027 for
+`marker-cls`, against 0.1039 for `prior`.
+
+Paired, `marker-cls` minus `marker`, same seed:
+
+| Dataset | NLL | Brier | Accuracy | Order stability |
+| --- | --- | --- | --- | --- |
+| GoEmotions | +0.0562 ± 0.0192 (0/3 better) | +0.0150 ± 0.0056 (0/3) | -0.0212 ± 0.0120 (0/3) | +0.0306 ± 0.0044 (3/3) |
+| Measuring Hate Speech | +0.0211 ± 0.0145 (0/3 better) | +0.0102 ± 0.0059 (0/3) | -0.0295 ± 0.0121 (0/3) | not applicable |
+
+`marker-cls` loses on both proper scores and on accuracy, on every seed, on both
+datasets. On GoEmotions the difference is close to three times its own spread. What
+it buys there is order stability, 0.995 against 0.965, and a lower ECE, which does
+not outweigh the NLL. The small-sample row of section 5 that read as "no harm" was
+noise: at full size there is a cost. The default stays `marker`.
+
+On Measuring Hate Speech the report now says `skipped_ordinal: 6800` and gives no
+stability number, because every question is a scale and the order of a scale is its
+meaning. The earlier tree permuted those options and reported a stability near 0.25,
+which meant nothing.
+
+### The saddle with three seeds
+
+Baseline mode. The NLI validation column is MultiNLI with hard labels, the test
+column is ChaosNLI with 100 annotators per item, calibrated.
+
+| Task | Encoder | Scorer | Validation accuracy | Test NLL | Test accuracy | Order stability |
+| --- | --- | --- | --- | --- | --- | --- |
+| NLI | `bert-base-uncased` | `marker` | 0.3443 ± 0.0159 | 1.0985 ± 0.0001 | 0.4212 ± 0.0433 | 0.3555 |
+| NLI | `bert-base-uncased` | `marker-cls` | 0.7477 ± 0.0040 | 1.0528 ± 0.0118 | 0.5049 ± 0.0063 | 0.9932 |
+| NLI | `ModernBERT-base` | `marker` | 0.3447 ± 0.0179 | 1.0986 ± 0.0003 | 0.3583 ± 0.1566 | 0.3937 |
+| NLI | `ModernBERT-base` | `marker-cls` | 0.8720 ± 0.0052 | 1.0253 ± 0.0092 | 0.5526 ± 0.0241 | 0.9816 |
+| BoolQ, balanced training | `bert-base-uncased` | `marker` | 0.6307 ± 0.0197 | 0.6930 ± 0.0002 | 0.6052 ± 0.0277 | 0.7119 |
+| BoolQ, balanced training | `bert-base-uncased` | `marker-cls` | 0.5971 ± 0.0938 | 0.6394 ± 0.0456 | 0.6050 ± 0.0933 | 0.9998 |
+
+ChaosNLI bars: `uniform` 1.0986, `prior` 1.0993. Balanced BoolQ bars: `prior`
+0.6931.
+
+- `marker` ends at exactly `log 3` on NLI and `log 2` on balanced BoolQ, on every
+  seed, with either encoder. Its accuracy on balanced BoolQ is what a constant
+  answer gets on a test split that is 62% yes.
+- `marker-cls` leaves the saddle on all nine runs. Paired NLL against `marker`:
+  -0.0458 ± 0.0118 on NLI with BERT, -0.0732 ± 0.0095 with ModernBERT, -0.0537 ±
+  0.0455 on balanced BoolQ, 3 of 3 seeds each.
+- Leaving the saddle is not the same as learning the task. On balanced BoolQ the
+  calibrated NLL improves but the accuracy stays at the constant answer, the
+  uncalibrated validation NLL is worse than `log 2` (0.7724 ± 0.1234), and the fitted
+  temperature is 4.9 ± 4.4. On NLI it does learn: 0.75 validation accuracy with BERT
+  and 0.87 with ModernBERT.
+- The ChaosNLI test still asks for temperatures of 2.8 to 3.9. With ModernBERT the
+  calibrated model now beats `prior` with room (1.0253 against 1.0993), which BERT
+  only barely did (section 5).
+
+### RLCD against the baseline, again
+
+| Dataset | Encoder | Baseline NLL | RLCD NLL | Paired, RLCD minus baseline |
+| --- | --- | --- | --- | --- |
+| GoEmotions | `ModernBERT-base` | 1.8549 ± 0.0119 | 1.8980 ± 0.0252 | +0.0432 ± 0.0345 (0/3 better) |
+| Measuring Hate Speech | `ModernBERT-base` | 1.0516 ± 0.0041 | 1.0469 ± 0.0079 | -0.0047 ± 0.0104 (2/3 better) |
+| NLI, `marker-cls` | `ModernBERT-base` | 1.0253 ± 0.0092 | 1.0487 ± 0.0501 | +0.0234 ± 0.0417 (1/3 better) |
+
+`--advantage-norm batch` everywhere. On GoEmotions with ModernBERT Brier and accuracy
+tie (+0.0004 ± 0.0069 and +0.0047 ± 0.0133). On Measuring Hate Speech RLCD is ahead on
+accuracy on all three seeds (+0.0098 ± 0.0068) and ties on RPS (0.0479 against
+0.0485). On NLI one RLCD seed fell back onto the saddle even with `marker-cls`
+(validation accuracy 0.324, test NLL 1.1045), and the other two matched the
+baseline (0.878 and 0.864 validation accuracy).
+
+Put next to sections 1 and 4, that is five comparisons: RLCD loses on GoEmotions
+with both encoders, ties on Measuring Hate Speech with both, and is unstable on NLI.
+It has not won one yet. The setting its authors report gains in, teacher-model soft
+targets, is still untested.
+
+### Encoders at full size
+
+Baseline mode, `marker` except on NLI.
+
+| Dataset | `bert-base-uncased` | `ModernBERT-base` |
+| --- | --- | --- |
+| GoEmotions, NLL | 1.8676 ± 0.0076 | 1.8549 ± 0.0119 |
+| Measuring Hate Speech, NLL | 1.0515 ± 0.0043 | 1.0516 ± 0.0041 |
+| NLI with `marker-cls`, validation accuracy | 0.7477 ± 0.0040 | 0.8720 ± 0.0052 |
+| NLI with `marker-cls`, ChaosNLI NLL | 1.0528 ± 0.0118 | 1.0253 ± 0.0092 |
+
+ModernBERT is worth 12 points of accuracy on NLI and nothing measurable on the other
+two. A job costs about 1.5 times as long. These are not paired runs of one
+experiment: the BERT and ModernBERT blocks share seeds and protocol but ran
+separately.
+
+### How often the model confidently misses
+
+`confident_miss_rate` in `training.json` is the share of claimed target components
+the model gave less than `1e-4` to, which is exactly where the old log floor acted.
+Per epoch, over every run above that has the counter:
+
+| Mode | Dataset | Lowest and highest rate over epochs and seeds |
+| --- | --- | --- |
+| baseline | GoEmotions, both scorers and encoders | 0 to 8.3e-05 |
+| baseline | Measuring Hate Speech | 0 with `marker`, up to 1.8e-05 with `marker-cls` |
+| baseline | NLI | 0 |
+| baseline | balanced BoolQ | 0 with `marker`, up to 1.7e-03 with `marker-cls` |
+| RLCD | GoEmotions, ModernBERT | 2.3e-04 to 1.9e-03 |
+| RLCD | NLI, `marker-cls` | 0 |
+
+In RLCD mode the sampled candidates miss at the same rate as the centre (2.7e-04 to
+1.9e-03). RLCD makes confident misses ten to a hundred times more often than the
+baseline, which fits the overconfident optimum of the sigma-smoothed objective
+(section 8). Even so the old floor touched at most 0.2% of components, which is why
+removing it changed nothing measurable in section 2. That was an inference, and is
+now a count.
+
+### A per-option readout sits on the same plateau (probe, one seed)
+
+A probe outside the package reads one sequence per option, `[CLS] type instruction
+[SEP] option [SEP] state [SEP]`, scores the `[CLS]` vector with one shared
+`LayerNorm` and `Linear(H, 1)`, and takes the softmax across options. Same reward,
+learning rates, batch and data as above: `bert-base-uncased`, 16,000 NLI rows, seed
+17, no `--option-shuffle` (without a set head the answer cannot depend on option
+order). Validation is MultiNLI with hard labels, uncalibrated.
+
+| Run | Validation NLL | Validation accuracy | Mean logit spread |
+| --- | --- | --- | --- |
+| Per-option readout, 1 epoch | 1.0986 | 0.329 | 0.001 |
+| Per-option readout, 3 epochs | 0.6903 | 0.761 | 4.9 |
+| Per-option readout, 1 epoch, skewed labels (60/25/15) | 0.8117 | 0.670 | 2.8 |
+| `marker`, 1 epoch (above) | 1.0986 | 0.344 | 0.002 |
+| `marker-cls`, 1 epoch (above) | 0.6233 | 0.748 | |
+
+The one-epoch run stayed at `log 3` with a flat training loss for the whole epoch,
+like the marker readout. The three-epoch run, same seed and same data order, left
+the plateau during its first epoch (mean training loss 0.625 against 0.672) and
+reached 0.761. The only difference between the two first epochs is GPU
+non-determinism, so when this readout leaves the plateau is not stable. With skewed
+labels it learns within one epoch, as `marker` did in section 5 (0.689).
+
+So the plateau does not come from reading a `[MASK]` position: it comes from one
+scorer shared by options that look nearly the same at the start, under balanced
+labels, and a per-option readout shares that. It can leave on its own, late and
+unreliably. What `marker-cls` adds is a readout vector per option, built from the
+option's own text, which breaks the symmetry from the first updates on every seed
+tried. Whether `marker` itself would leave the plateau on NLI with three epochs was
+not run. On balanced BoolQ, three epochs, it did not on any of three seeds.
+
+A decoder backbone with the same per-option readout is section 10.
+
+## 10. A decoder backbone, probe results, 2026-09-21
+
+Same probe as the end of section 9, with `Qwen/Qwen3-0.6B` as the backbone: one
+sequence per option, `State: <state> / type / Question: <instruction> / Candidate:
+<option> / Decision: <EOS>`, the hidden state of the last token scored by one shared
+`LayerNorm` and `Linear(1024, 1)`, softmax across options. The language-model head is
+not loaded. Full fine-tune, no LoRA, float32 weights with bfloat16 autocast, AdamW
+with backbone lr `1e-5` and head lr `1e-4`, weight decay `0.01`, grad clip `1.0`,
+batch 8 with `--grad-accum 2`. Reward, calibration and metrics are the package's.
+Nothing here is in the package: `exu-train`, `exu-evaluate` and `exu-decide` do not
+know this path. Preliminary in every respect.
+
+### NLI, three seeds
+
+16,000 MultiNLI rows, one epoch, tested on ChaosNLI, calibrated. The encoder rows
+are the section 9 numbers.
+
+| Backbone | Scorer or readout | Validation accuracy | ChaosNLI NLL | ChaosNLI Brier | Temperature | Minutes per run |
+| --- | --- | --- | --- | --- | --- | --- |
+| `bert-base-uncased` | `marker` | 0.3443 ± 0.0159 | 1.0985 ± 0.0001 | 0.2087 | 1.0 | 3 (5090) |
+| `bert-base-uncased` | `marker-cls` | 0.7477 ± 0.0040 | 1.0528 ± 0.0118 | 0.1789 | 3.4 | 3 (5090) |
+| `ModernBERT-base` | `marker-cls` | 0.8720 ± 0.0052 | 1.0253 ± 0.0092 | 0.1605 | 3.3 | 7.5 (5090) |
+| `Qwen3-0.6B` | per-option, last token | 0.8643 ± 0.0102 | 0.9979 ± 0.0139 | 0.1474 ± 0.0092 | 2.7 ± 0.8 | 36 (3060) |
+
+- The decoder learns this balanced task from the first updates, with no remedy: the
+  training loss was below the uniform guess within 200 batches on every seed. That
+  is not immunity to the saddle of section 5: on balanced BoolQ, below, two of three
+  seeds sit on it for the whole epoch.
+- On ChaosNLI it is the first model under 1.0, with room over `prior` (1.0993), and
+  the best Brier. Uncalibrated it is not better than the encoders (1.24 ± 0.15
+  against 1.23 to 1.40): it is as overconfident on ambiguous items, and one seed
+  (17, temperature 1.8) made that look better than it is.
+- Validation accuracy ties ModernBERT with `marker-cls`.
+- Cost: about 12 times a BERT run per epoch, for 3 options per question.
+
+### GoEmotions, 16,000 training rows, one seed
+
+Seed 17. The training sample is a third of the split; validation, calibration and
+test are the full splits. Test numbers calibrated. `sft` is `--mode baseline`, the
+package's direct loss, for two epochs. The second-stage arms start from its saved
+weights and add one epoch each; the second stage checks validation before its first
+update and reproduced the first stage's number exactly (1.8742).
+
+| Arm | Epochs | Test NLL | Brier | Accuracy | ECE | Confident-miss rate, last epoch |
+| --- | --- | --- | --- | --- | --- | --- |
+| `sft` (baseline) | 2 | 1.8653 | 0.2191 | 0.5505 | 0.127 | 1.0e-04 |
+| `sft` then baseline | 2 + 1 | 1.9276 | 0.2328 | 0.5321 | 0.128 | 7e-04 |
+| `sft` then RLCD | 2 + 1 | 1.9864 | 0.2448 | 0.5119 | 0.133 | 1.0e-03 |
+| `bert-base-uncased` `marker`, full split, 3 epochs (section 9) | 3 | 1.8676 ± 0.0076 | 0.2195 | 0.5514 | 0.110 | |
+
+- With a third of the data and one epoch less, the decoder ties the BERT baseline
+  trained on the whole split. It took 41 minutes per epoch on an RTX 5090 with
+  gradient checkpointing, against 25 for the BERT job sharing the card with three
+  others.
+- A third epoch hurts either way: training loss kept falling (1.06) while validation
+  rose. 16,000 rows are not enough for a 0.6B model to keep learning past two
+  epochs, so this second stage started with no room to improve.
+- In that situation RLCD lost 0.059 more than the direct loss did, from the same
+  weights and the same number of updates, and its confident-miss rate was ten times
+  the first stage's. Sixth comparison, still no win for RLCD. Whether it helps when
+  the model still has room is the run on the full split, below.
+
+### GoEmotions, full training split
+
+The full 46,370 training rows, `--max-length 128` (cuts 5 of 58,007 questions;
+without it one batch of outliers takes the whole 32 GB card). `sft` is one epoch of
+the direct loss, and has three seeds; the other arms are seed 17 only. The two second stages start from its weights, checked
+against its validation number before the first update (1.8476, exact), and add one
+epoch each. The from-scratch RLCD arm has two epochs, so every final arm has two.
+About 61 minutes per epoch on an RTX 5090 (97 on a slower host).
+
+| Arm | Epochs | Test NLL | Brier | Accuracy | ECE | Confident-miss rate, last epoch |
+| --- | --- | --- | --- | --- | --- | --- |
+| `sft` (baseline), seed 17 | 1 | 1.8435 | 0.2142 | 0.5648 | 0.135 | 3.8e-05 |
+| `sft` (baseline), 3 seeds | 1 | **1.8417 ± 0.0019** | **0.2134 ± 0.0011** | **0.5587 ± 0.0092** | 0.116 ± 0.017 | 4e-05 to 8e-05 |
+| `sft` then baseline | 1 + 1 | 1.8704 | 0.2194 | 0.5568 | 0.143 | 2.2e-04 |
+| `sft` then RLCD | 1 + 1 | 1.9129 | 0.2244 | 0.5457 | 0.125 | 3.3e-03 |
+| RLCD from scratch | 2 | 1.8933 | 0.2220 | 0.5542 | 0.114 | 1.3e-03 |
+| `bert-base-uncased` `marker`, 3 epochs, 3 seeds (section 9) | 3 | 1.8676 ± 0.0076 | 0.2195 | 0.5514 | 0.110 | |
+| `ModernBERT-base` `marker`, 3 epochs, 3 seeds (section 9) | 3 | 1.8549 ± 0.0119 | 0.2174 | 0.5542 | 0.102 | |
+
+- One epoch of the decoder on the full split is the best GoEmotions number
+  measured so far, and it holds across seeds: 1.8417 ± 0.0019, against 1.8676 ±
+  0.0076 for BERT and 1.8549 ± 0.0119 for ModernBERT, each trained for three
+  epochs. The gap to ModernBERT is 0.013, seven times the decoder's own spread. The
+  three seeds land within 0.004 of each other, tighter than any encoder block.
+- More data moved the ceiling (1.8653 on 16,000 rows, 1.8435 on 46,370) but did not
+  open a second epoch: the direct loss also loses 0.027 when it continues, with the
+  training loss still falling (1.27). At this learning rate the decoder's peak on
+  GoEmotions is one pass over the data whatever the split size.
+- Given the same starting point and the same extra updates, RLCD loses 0.042 more
+  than the direct loss does, and it makes confident misses fifteen times as often.
+  From scratch with two epochs it lands between the two, and 0.050 behind the
+  one-epoch `sft`. Seventh and eighth comparisons; RLCD has not won one on any
+  backbone.
+- A second stage started at the peak has no room to improve in either mode, so
+  this does not test "RLCD on a model that still has room". A lower learning rate,
+  or a second stage after a shorter first one, would.
+
+### Measuring Hate Speech, three seeds
+
+The `score` kind: four ordinal facets on 3 or 5 levels, soft targets, RPS in the
+reward. One epoch, `--max-length 512` (no question cut). Seed 42 ran on an RTX 5090
+(27 minutes), seeds 17 and 23 on the RTX 3060s at batch 4 with `--grad-accum 4`
+(about three hours each). Test numbers calibrated. Encoder rows are the section 9
+`marker` numbers, three epochs.
+
+| Model | NLL | Brier | RPS | Ordinal MAE | Accuracy | ECE |
+| --- | --- | --- | --- | --- | --- | --- |
+| decoder, 1 epoch | 1.0546 ± 0.0059 | 0.1961 ± 0.0024 | 0.0498 ± 0.0011 | 0.4686 ± 0.0061 | 0.6136 ± 0.0109 | 0.083 ± 0.011 |
+| `bert-base-uncased`, 3 epochs | 1.0515 ± 0.0043 | 0.1942 ± 0.0019 | 0.0486 ± 0.0010 | 0.4592 ± 0.0071 | 0.6162 ± 0.0071 | 0.082 ± 0.003 |
+| `ModernBERT-base`, 3 epochs | 1.0516 ± 0.0041 | 0.1954 ± 0.0012 | 0.0485 ± 0.0011 | 0.4572 ± 0.0071 | 0.6088 ± 0.0023 | 0.083 ± 0.005 |
+
+Bars: `prior` NLL 1.2838, RPS 0.1039.
+
+- A tie, with the decoder a hair behind on every proper score: 0.003 of NLL and
+  0.001 of RPS, inside one spread. The first kind where the decoder does not lead,
+  and the only one here where the encoders had three epochs against its one; whether
+  a second epoch helps the decoder on this task was not run (on GoEmotions it did
+  not).
+- Confident-miss rate 0 on every seed. Fitted temperatures 1.06 to 1.12, against
+  1.55 ± 0.28 for the BERT arm: the decoder is closer to calibrated as trained.
+
+### BoolQ, three seeds, on the 3060s
+
+One epoch, batch 4 with `--grad-accum 4` (16 questions per update, as everywhere
+else), `--max-length 512` (cuts 37 of 10,644 questions), test numbers calibrated.
+The `noul` kind: two sequences per question that differ in one token, `No` or
+`Yes`. About 30 minutes per run on an RTX 3060 for the natural split, 21 for the
+balanced one. Encoder rows are the section 5 and 9 numbers with `bert-base-uncased`,
+three epochs.
+
+| Training split | Model | Test NLL | Accuracy | Brier | Logit spread |
+| --- | --- | --- | --- | --- | --- |
+| natural, 62% yes | decoder, seed 17 / 23 / 42 | 0.3963 / 0.6324 / 0.5214 | 0.828 / 0.615 / 0.755 | 0.249 / 0.443 / 0.345 | 2.2 / 0.6 / 1.7 |
+| natural, 62% yes | `marker`, 3 seeds, 3 epochs | 0.6356 / 0.6282 / 0.7402 | 0.703 / 0.710 / 0.694 | | |
+| balanced | decoder, seed 17 / 23 / 42 | 0.6931 / 0.6841 / 0.4244 | 0.492 / 0.512 / 0.818 | 0.500 / 0.491 / 0.269 | 0.005 / 0.008 / 2.2 |
+| balanced | `marker`, 3 seeds, 3 epochs | 0.6930 ± 0.0002 | 0.605 | 0.500 | |
+| balanced | `marker-cls`, 3 seeds, 3 epochs | 0.6394 ± 0.0456 | 0.605 | 0.449 | |
+
+Bars: `prior` NLL 0.663 on the natural split, 0.6931 on the balanced one.
+
+- When the decoder leaves the plateau it is far ahead of every encoder run on this
+  task: 0.828 accuracy and NLL 0.396 on seed 17, against 0.69 to 0.71 and 0.63 to
+  0.74 for `marker` with three times the epochs. Seed 42 on the balanced split, which
+  no encoder run ever learned, reaches 0.818.
+- Whether it leaves is a matter of seed. On the balanced split two seeds stayed at
+  exactly `log 2` for the whole epoch, with a logit spread under 0.01: the same
+  saddle as section 5, on a decoder. On the natural split all three left, but seed
+  23 barely did (spread 0.6, accuracy 0.615, the majority-class rate). The training
+  loss of a run on the plateau is 0.163 for two options, which is the uniform guess
+  under the composite reward, not a sign of learning.
+- So the decoder does not remove the condition, it changes the odds: three
+  balanced options with long, distinct candidate texts (NLI) were learned on every
+  seed, two options that differ in a single token were learned on one seed in three.
+  A per-option readout vector built from the candidate text, the idea behind
+  `marker-cls`, is the untested remedy for this path.
+
 ## What has not been measured
 
-- How often training puts a prediction below `1e-4`. No instrumentation exists.
 - RLCD with teacher-model soft targets, which is where its authors report gains.
-- Any other encoder at full scale, more epochs, another sigma schedule.
-- The `marker-cls` scorer of section 5 beyond one seed, in RLCD mode, or at full
-  size on the datasets where the marker scorer already works.
+- RLCD as a second stage on top of a model already trained in baseline mode. Every
+  RLCD run so far started from a fresh head.
+- More epochs, another sigma schedule, another learning rate.
+- A decoder backbone beyond section 10: more than one epoch with a decaying
+  learning rate, a shorter first stage before RLCD, a prefix shared across the K
+  sequences, LoRA, and a remedy for its plateau on balanced two-option questions.
+- Whether four jobs sharing one GPU change a result. Runs are seeded and independent,
+  and the `marker` baseline matches the one-job-per-GPU number, but no run was
+  repeated both ways.
 - The `noul` kind beyond BoolQ, and BoolQ beyond one question wording.
 - Held-out task families. Every dataset above is a single question, or a few
   questions that all appear in training.
