@@ -6,6 +6,11 @@ Two modes share one pipeline:
   stable, and the bar the RLCD mode has to beat.
 - ``rlcd``: perturbed-logit policy gradient with the same score as reward.
 
+``--backbone`` picks the architecture. ``encoder`` is the default and reads every
+option of a question at its marker in one sequence. ``decoder`` is experimental:
+one sequence per option, read at the last token, K times the forward cost. The
+choice is stored in the checkpoint, so evaluation and inference never ask again.
+
 After training, ``--calibrate`` fits temperatures on a held-out split (the
 calibration split if given, validation otherwise) and reports the ECE before and
 after. The checkpoint stores the model, the sequence configuration, the
@@ -26,18 +31,23 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
+from .architecture import DecisionModel, builder_for, model_from_pretrained
 from .augmentation import OptionShuffler
 from .calibration import TemperatureMap, fit_temperature_map
 from .checkpoint import save_checkpoint
 from .data import DecisionDataset, TrainingBatch, load_jsonl
 from .devices import autocast_context, resolve_device
 from .evaluation import collect, metrics_for
-from .model import SCORERS, ExuConfig, ExuModel, masked_log_softmax
+from .model import DEFAULT_DECODER, DEFAULT_ENCODER, SCORERS, ExuConfig, masked_log_softmax
 from .policy import PolicyConfig, policy_gradient_loss, sigma_for
 from .scoring import CONFIDENT_MISS, confident_misses, proper_scoring_loss, reward_definition
-from .sequence import SequenceBuilder, SequenceConfig
+from .sequence import SequenceConfig
 
 _DEFAULT_POLICY = PolicyConfig()
+# Per backbone. The decoder numbers in BENCHMARKS.md peak at 1e-5 and one epoch;
+# the encoder default is the one the encoder runs used.
+_DEFAULT_BACKBONE = {"encoder": DEFAULT_ENCODER, "decoder": DEFAULT_DECODER}
+_DEFAULT_BACKBONE_LR = {"encoder": 2.5e-5, "decoder": 1e-5}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,7 +67,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--calibration-split", help="optional split name selected from --calibration"
     )
     parser.add_argument("--output", required=True, type=Path, help="new checkpoint directory")
-    parser.add_argument("--encoder", default=ExuConfig().encoder_name)
+    parser.add_argument(
+        "--backbone",
+        choices=tuple(_DEFAULT_BACKBONE),
+        default="encoder",
+        help="encoder reads every option at its marker in one sequence. decoder "
+        "(experimental) reads one sequence per option at its last token",
+    )
+    parser.add_argument(
+        "--encoder",
+        help="Hugging Face name or folder of the pretrained backbone, encoder or decoder "
+        f"(default: {DEFAULT_ENCODER}, or {DEFAULT_DECODER} with --backbone decoder)",
+    )
     parser.add_argument("--mode", choices=("baseline", "rlcd"), default="rlcd")
     parser.add_argument(
         "--scorer",
@@ -70,13 +91,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=_positive_int, default=8)
     parser.add_argument("--grad-accum", type=_positive_int, default=1)
     parser.add_argument("--seed", type=int, default=17)
-    parser.add_argument("--encoder-lr", type=_positive_float, default=2.5e-5)
+    parser.add_argument(
+        "--encoder-lr",
+        type=_positive_float,
+        help="learning rate of the backbone (default: 2.5e-5, or 1e-5 with --backbone decoder)",
+    )
     parser.add_argument("--head-lr", type=_positive_float, default=1e-4)
     parser.add_argument("--weight-decay", type=_non_negative_float, default=0.01)
     parser.add_argument("--max-grad-norm", type=_positive_float, default=1.0)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     parser.add_argument("--max-length", type=_positive_int, default=512)
-    parser.add_argument("--header-budget", type=_positive_int, default=192)
+    parser.add_argument(
+        "--header-budget",
+        type=_positive_int,
+        help="tokens for everything but the state (default: 192, or --max-length if smaller)",
+    )
+    parser.add_argument(
+        "--grad-checkpointing",
+        action="store_true",
+        help="recompute backbone activations in the backward pass: less memory, slower",
+    )
     parser.add_argument(
         "--option-shuffle", action="store_true", help="permute a question's options every pass"
     )
@@ -112,6 +146,14 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def resolve_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    """Fill the flags whose default depends on the backbone or on another flag."""
+    args.encoder = args.encoder or _DEFAULT_BACKBONE[args.backbone]
+    args.encoder_lr = args.encoder_lr or _DEFAULT_BACKBONE_LR[args.backbone]
+    args.header_budget = args.header_budget or min(192, args.max_length)
+    return args
+
+
 @dataclass(frozen=True, slots=True)
 class EpochStats:
     """Aggregated training diagnostics for one epoch."""
@@ -130,17 +172,22 @@ class EpochStats:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if args.output.exists():
         raise FileExistsError(f"output path already exists: {args.output}")
+    if args.backbone == "decoder" and args.scorer != "marker":
+        parser.error("--scorer marker-cls exists for the encoder's markers only")
+    resolve_defaults(args)
 
     _set_seed(args.seed)
     device = resolve_device(args.device)
     policy = _policy_from_args(args) if args.mode == "rlcd" else None
     sequence = SequenceConfig(max_length=args.max_length, header_budget=args.header_budget)
+    config = ExuConfig(encoder_name=args.encoder, scorer=args.scorer, backbone=args.backbone)
 
     tokenizer = AutoTokenizer.from_pretrained(args.encoder)
-    builder = SequenceBuilder(tokenizer, sequence)
+    builder = builder_for(tokenizer, sequence, config)
     train_examples = load_jsonl(args.train, args.train_split)
     validation_examples = load_jsonl(args.validation, args.validation_split)
     test_examples = load_jsonl(args.test, args.test_split) if args.test else None
@@ -157,22 +204,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         _loader(DecisionDataset(test_examples, builder), args.batch_size) if test_examples else None
     )
 
-    model = ExuModel.from_pretrained(ExuConfig(encoder_name=args.encoder, scorer=args.scorer)).to(
-        device
-    )
+    model = model_from_pretrained(config)
+    if args.grad_checkpointing:
+        model.backbone.gradient_checkpointing_enable()
+    model = model.to(device)
+    backbone_ids = {id(parameter) for parameter in model.backbone.parameters()}
     optimizer = AdamW(
         [
-            {"params": model.encoder.parameters(), "lr": args.encoder_lr},
+            {"params": model.backbone.parameters(), "lr": args.encoder_lr},
             {
                 "params": [
                     parameter
-                    for name, parameter in model.named_parameters()
-                    if not name.startswith("encoder.")
+                    for parameter in model.parameters()
+                    if id(parameter) not in backbone_ids
                 ],
                 "lr": args.head_lr,
             },
         ],
         weight_decay=args.weight_decay,
+        # The fused multi-tensor step allocates a copy of the second moments. On a
+        # 12 GB card that copy is what ran a 0.6B decoder out of memory.
+        foreach=False if args.backbone == "decoder" else None,
     )
 
     steps_per_epoch = max(1, (len(train_loader) + args.grad_accum - 1) // args.grad_accum)
@@ -257,7 +309,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "seed": args.seed,
         "device": str(device),
         "mode": args.mode,
+        "architecture": config.architecture(),
         "encoder": args.encoder,
+        "encoder_lr": args.encoder_lr,
+        "head_lr": args.head_lr,
+        "grad_checkpointing": args.grad_checkpointing,
         "scorer": args.scorer,
         "epochs": args.epochs,
         "batch_size": args.batch_size,
@@ -279,7 +335,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _train_epoch(
-    model: ExuModel,
+    model: DecisionModel,
     loader: DataLoader[TrainingBatch],
     optimizer: AdamW,
     device: torch.device,
@@ -373,7 +429,7 @@ def _train_epoch(
     return stats, step
 
 
-def _optimizer_step(model: ExuModel, optimizer: AdamW, max_grad_norm: float) -> None:
+def _optimizer_step(model: DecisionModel, optimizer: AdamW, max_grad_norm: float) -> None:
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
     optimizer.step()
     optimizer.zero_grad(set_to_none=True)

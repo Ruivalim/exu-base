@@ -28,7 +28,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
+
+import torch
+from torch import Tensor
 
 from .types import DecisionQuestion
 
@@ -51,6 +54,31 @@ class MaskTokenizer(Protocol):
     mask_token: str | None
 
     def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]: ...
+
+
+class EncodedDecision(Protocol):
+    """One question after a builder has turned it into token ids, in any layout."""
+
+    @property
+    def option_count(self) -> int: ...
+
+
+class DecisionBuilder(Protocol):
+    """What the pipeline needs from a builder, whatever the model reads.
+
+    Training, evaluation and the runtime only build questions and hand the
+    batch to the model as keyword arguments. Which tensors those are is the
+    builder's business and its model's, so a second layout is a second builder,
+    not a change everywhere a batch is made.
+    """
+
+    def build(self, state: str, question: DecisionQuestion) -> EncodedDecision: ...
+
+    # Takes what this builder's own ``build`` returned, hence ``Any``: a protocol
+    # parameter typed EncodedDecision would reject every concrete builder.
+    def tensors(
+        self, encoded: Sequence[Any], device: torch.device | str | None = None
+    ) -> dict[str, Tensor]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +137,10 @@ class EncodedQuestion:
     attention_mask: tuple[int, ...]
     marker_positions: tuple[int, ...]
     question_type_id: int
+
+    @property
+    def option_count(self) -> int:
+        return len(self.marker_positions)
 
 
 class SequenceBuilder:
@@ -180,6 +212,25 @@ class SequenceBuilder:
                 for item in encoded
             ],
             "question_type_ids": [item.question_type_id for item in encoded],
+        }
+
+    def tensors(
+        self,
+        encoded: Sequence[EncodedQuestion],
+        device: torch.device | str | None = None,
+    ) -> dict[str, Tensor]:
+        """The keyword arguments of :meth:`exu.model.ExuModel.forward` for a batch."""
+        raw = self.pad(list(encoded))
+        return {
+            "input_ids": torch.tensor(raw["input_ids"], dtype=torch.long, device=device),
+            "attention_mask": torch.tensor(raw["attention_mask"], dtype=torch.long, device=device),
+            "marker_positions": torch.tensor(
+                raw["marker_positions"], dtype=torch.long, device=device
+            ),
+            "option_mask": torch.tensor(raw["option_mask"], dtype=torch.bool, device=device),
+            "question_type_ids": torch.tensor(
+                raw["question_type_ids"], dtype=torch.long, device=device
+            ),
         }
 
     def _allocate_header(

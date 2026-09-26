@@ -3,14 +3,16 @@
 Layout::
 
     checkpoint/
-      exu.json            # format version, model config, sequence config, temperatures
-      model.safetensors    # every weight, encoder included, one file
-      encoder_config/      # architecture only, so loading never downloads weights
+      exu.json            # format version, architecture, model, sequence, temperatures
+      model.safetensors    # every weight, backbone included, one file
+      encoder_config/      # the backbone's config only, so loading never downloads weights
       tokenizer/           # tokenizer files, so inference is offline
 
-Loading validates before it loads: format version, required keys, expected weight
-prefixes, strict state dict. A clear error beats a silent wrong answer when
-someone points at the wrong folder.
+Loading validates before it loads: format version, required keys, a state dict
+that matches the stored architecture exactly. A clear error beats a silent wrong
+answer when someone points at the wrong folder. The ``architecture`` block picks
+the model and the builder; format 1 had none and is always the encoder with
+markers, so older checkpoints keep loading.
 """
 
 from __future__ import annotations
@@ -25,26 +27,24 @@ import torch
 from safetensors.torch import load_file, save_file
 from transformers import AutoConfig, AutoModel
 
+from .architecture import DecisionModel, build_model
 from .calibration import TemperatureMap
-from .model import ExuConfig, ExuModel
+from .model import ExuConfig
 from .sequence import SequenceConfig
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
+# Format 1 is format 2 without the architecture block.
+_READABLE_VERSIONS = (1, 2)
 METADATA_FILE = "exu.json"
 WEIGHTS_FILE = "model.safetensors"
 ENCODER_DIR = "encoder_config"
 TOKENIZER_DIR = "tokenizer"
 
-_REQUIRED_WEIGHT_PREFIXES = (
-    "encoder.",
-    "question_type_embedding.",
-    "decision_layers.",
-    "scorer.",
-    "action_head.",
-)
+# The attribute that holds the pretrained network, per backbone.
+_BACKBONE_PREFIX = {"encoder": "encoder.", "decoder": "backbone."}
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +52,7 @@ class Checkpoint:
     """A loaded checkpoint plus everything needed to run it."""
 
     path: Path
-    model: ExuModel
+    model: DecisionModel
     model_config: ExuConfig
     sequence_config: SequenceConfig
     temperature: TemperatureMap
@@ -60,7 +60,7 @@ class Checkpoint:
 
 def save_checkpoint(
     path: str | Path,
-    model: ExuModel,
+    model: DecisionModel,
     *,
     sequence_config: SequenceConfig | None = None,
     temperature: TemperatureMap | None = None,
@@ -72,11 +72,12 @@ def save_checkpoint(
         raise FileExistsError(f"checkpoint path already exists: {target}")
     target.mkdir(parents=True)
     try:
-        model.encoder.config.save_pretrained(target / ENCODER_DIR)
+        model.backbone.config.save_pretrained(target / ENCODER_DIR)
         _write_json(
             target / METADATA_FILE,
             {
                 "format_version": FORMAT_VERSION,
+                "architecture": model.config.architecture(),
                 "model": model.config.to_dict(),
                 "sequence": (sequence_config or SequenceConfig()).to_dict(),
                 "temperature": (temperature or TemperatureMap()).to_dict(),
@@ -98,7 +99,10 @@ def load_checkpoint(path: str | Path, device: torch.device | str = "cpu") -> Che
     """Rebuild a model from a folder without touching the network."""
     source = Path(path)
     metadata = _read_metadata(source)
-    model_config = ExuConfig.from_dict(_mapping(metadata["model"], "model"))
+    model_config = ExuConfig.from_dict(
+        _mapping(metadata["model"], "model"),
+        _mapping(metadata.get("architecture", {}), "architecture"),
+    )
     sequence_config = SequenceConfig.from_dict(_mapping(metadata.get("sequence", {}), "sequence"))
     temperature = TemperatureMap.from_dict(_mapping(metadata.get("temperature", {}), "temperature"))
 
@@ -110,9 +114,9 @@ def load_checkpoint(path: str | Path, device: torch.device | str = "cpu") -> Che
         raise FileNotFoundError(f"checkpoint is missing {ENCODER_DIR}/: {source}")
 
     encoder_config = AutoConfig.from_pretrained(encoder_dir, local_files_only=True)
-    model = ExuModel(AutoModel.from_config(encoder_config), model_config)
+    model = build_model(AutoModel.from_config(encoder_config), model_config)
     state = load_file(weights, device="cpu")
-    _validate_weight_keys(state, model.state_dict())
+    _validate_weight_keys(state, model.state_dict(), model_config.backbone)
     model.load_state_dict(state, strict=True)
     model.to(device)
     model.eval()
@@ -136,26 +140,38 @@ def _read_metadata(source: Path) -> dict:
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     if not isinstance(metadata, dict):
         raise ValueError(f"malformed checkpoint metadata: {metadata_path}")
-    if metadata.get("format_version") != FORMAT_VERSION:
+    if metadata.get("format_version") not in _READABLE_VERSIONS:
         raise ValueError(
             f"unsupported checkpoint format {metadata.get('format_version')!r}; "
-            f"expected {FORMAT_VERSION}"
+            f"expected one of {_READABLE_VERSIONS}"
         )
+    if metadata["format_version"] == 1 and "architecture" in metadata:
+        raise ValueError("format 1 checkpoints have no architecture block")
     if not isinstance(metadata.get("model"), dict):
         raise ValueError("checkpoint metadata has no model config")
     return metadata
 
 
-def _validate_weight_keys(state: dict, expected: dict) -> None:
-    """Fail with an actionable message when the weights are not an Exu model."""
+def _validate_weight_keys(state: dict, expected: dict, backbone: str) -> None:
+    """Fail with an actionable message when the weights are not this architecture.
+
+    Weights of one architecture never load as the other: the head and the
+    backbone live under different names, so the strict key comparison fails. The
+    message says which architecture the weights look like, because an edited
+    ``architecture`` block is the likely cause.
+    """
     if set(state) != set(expected):
         missing = sorted(set(expected) - set(state))[:3]
         extra = sorted(set(state) - set(expected))[:3]
+        hint = ""
+        for other, prefix in _BACKBONE_PREFIX.items():
+            if other != backbone and any(key.startswith(prefix) for key in state):
+                hint = f"; they look like a {other} checkpoint, the metadata says {backbone}"
         raise ValueError(
-            f"weights do not match the model architecture; missing={missing}, extra={extra}"
+            f"weights do not match the model architecture{hint}; missing={missing}, extra={extra}"
         )
-    if not any(key.startswith("encoder.") for key in state):
-        raise ValueError("weights contain no encoder tensors")
+    if not any(key.startswith(_BACKBONE_PREFIX[backbone]) for key in state):
+        raise ValueError("weights contain no backbone tensors")
 
 
 def _mapping(value: object, name: str) -> dict:

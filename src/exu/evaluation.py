@@ -16,12 +16,13 @@ import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
 
+from .architecture import DecisionModel
 from .augmentation import permute_example, random_order
 from .calibration import TemperatureMap
 from .data import TrainingBatch, TrainingExample
 from .metrics import DecisionMetrics, classification_metrics
-from .model import ExuModel, masked_softmax
-from .sequence import EncodedQuestion, SequenceBuilder
+from .model import masked_softmax
+from .sequence import DecisionBuilder, EncodedDecision
 from .types import DecisionType
 
 
@@ -54,7 +55,7 @@ class Collected:
 
 
 def collect(
-    model: ExuModel, loader: DataLoader[TrainingBatch], device: torch.device | str
+    model: DecisionModel, loader: DataLoader[TrainingBatch], device: torch.device | str
 ) -> Collected:
     """Run the model over a loader and keep every logit."""
     model.eval()
@@ -133,8 +134,8 @@ def grouped_metrics(
 
 
 def order_robustness(
-    model: ExuModel,
-    builder: SequenceBuilder,
+    model: DecisionModel,
+    builder: DecisionBuilder,
     examples: Sequence[TrainingExample],
     temperature: TemperatureMap,
     *,
@@ -188,7 +189,7 @@ def order_robustness(
     winners = [int(row.argmax().item()) for row in base]
 
     generator = random.Random(seed)
-    encoded: list[EncodedQuestion] = []
+    encoded: list[EncodedDecision] = []
     metadata: list[tuple[int, list[int]]] = []
     temperatures: list[float] = []
     for index, example in enumerate(examples):
@@ -222,8 +223,8 @@ def order_robustness(
 
 
 def latency_benchmark(
-    model: ExuModel,
-    builder: SequenceBuilder,
+    model: DecisionModel,
+    builder: DecisionBuilder,
     examples: Sequence[TrainingExample],
     temperature: TemperatureMap,
     *,
@@ -265,9 +266,9 @@ def latency_benchmark(
 
 
 def _forward_probabilities(
-    model: ExuModel,
-    builder: SequenceBuilder,
-    encoded: Sequence[EncodedQuestion],
+    model: DecisionModel,
+    builder: DecisionBuilder,
+    encoded: Sequence[EncodedDecision],
     temperatures: Sequence[float],
     device: torch.device | str,
     batch_size: int,
@@ -278,25 +279,14 @@ def _forward_probabilities(
     rows: list[Tensor] = []
     for start in range(0, len(encoded), batch_size):
         chunk = list(encoded[start : start + batch_size])
-        raw = builder.pad(chunk)
-        inputs = {
-            "input_ids": torch.tensor(raw["input_ids"], dtype=torch.long, device=device),
-            "attention_mask": torch.tensor(raw["attention_mask"], dtype=torch.long, device=device),
-            "marker_positions": torch.tensor(
-                raw["marker_positions"], dtype=torch.long, device=device
-            ),
-            "option_mask": torch.tensor(raw["option_mask"], dtype=torch.bool, device=device),
-            "question_type_ids": torch.tensor(
-                raw["question_type_ids"], dtype=torch.long, device=device
-            ),
-        }
+        inputs = builder.tensors(chunk, device)
         local_temperature = torch.tensor(
             list(temperatures[start : start + batch_size]), dtype=torch.float32, device=device
         )
         with torch.inference_mode():
             output = model(**inputs, temperature=local_temperature)
         for offset, item in enumerate(chunk):
-            rows.append(output.probabilities[offset, : len(item.marker_positions)].cpu())
+            rows.append(output.probabilities[offset, : item.option_count].cpu())
     return rows
 
 

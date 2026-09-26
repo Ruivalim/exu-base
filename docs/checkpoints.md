@@ -5,9 +5,9 @@ weights, temperatures and tokenizer.
 
 ```
 checkpoint/
-  exu.json            format version, model config, sequence config, temperature map
-  model.safetensors    every weight, encoder included, one file
-  encoder_config/      architecture only, so loading never downloads base weights
+  exu.json            format version, architecture, model, sequence, temperature map
+  model.safetensors    every weight, backbone included, one file
+  encoder_config/      the backbone's config only (encoder or decoder), no weights
   tokenizer/           tokenizer files
   training.json        written by exu-train: seed, mode, hyperparameters, metrics
 ```
@@ -16,7 +16,8 @@ checkpoint/
 
 ```json
 {
-  "format_version": 1,
+  "format_version": 2,
+  "architecture": {"backbone": "encoder", "readout": "markers"},
   "model": {
     "encoder_name": "google-bert/bert-base-multilingual-cased",
     "num_decision_layers": 2,
@@ -29,6 +30,14 @@ checkpoint/
 }
 ```
 
+`architecture` decides which model and which sequence builder the checkpoint
+runs with: `encoder` with `markers` (one sequence per question, read at each
+option's marker) or `decoder` with `per-option` (one sequence per option, read at
+its last token, experimental). `exu-evaluate`, `exu-decide` and `DecisionRuntime`
+read it from here and take no flag for it. Format 1 has no `architecture` block
+and always means `encoder` with `markers`, so every checkpoint written before the
+decoder existed still loads; a format 1 file that does carry the block is refused.
+
 `temperature` takes precedence in this order: the `(type, option count bucket)`
 cell, then the type, then `default`. Buckets are the ranges `2`, `3-5`, `6-10`
 and `11+`.
@@ -37,7 +46,9 @@ and `11+`.
 
 `load_checkpoint` refuses a folder that is not a checkpoint, an unsupported format
 version, a missing weights or encoder-config file, and a state dict whose keys do
-not match the architecture. The error names the missing and unexpected keys. A
+not match the architecture. The error names the missing and unexpected keys, and
+when the weights look like the other architecture (an edited `architecture`
+block, say) it says so. Weights of one architecture never load as the other. A
 clear error is worth a lot when someone points at the wrong folder.
 
 ## Saving
@@ -63,12 +74,16 @@ moving it explicitly first keeps the peak host memory predictable.
 ## Loading
 
 ```python
-from exu import load_checkpoint, load_tokenizer, SequenceBuilder
+from exu import builder_for, load_checkpoint, load_tokenizer
 
 checkpoint = load_checkpoint("artifacts/my-model", device="cpu")
 tokenizer = load_tokenizer("artifacts/my-model")
-builder = SequenceBuilder(tokenizer, checkpoint.sequence_config)
+builder = builder_for(tokenizer, checkpoint.sequence_config, checkpoint.model_config)
 ```
+
+`builder_for` returns the builder that matches the checkpoint's architecture.
+Building a `SequenceBuilder` by hand still works for an encoder checkpoint, and
+gives a decoder checkpoint batches it cannot read.
 
 `load_checkpoint` returns the model in eval mode, plus the model config, sequence
 config and temperature map. It never touches the network.

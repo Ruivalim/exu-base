@@ -5,8 +5,10 @@ cold, by an agent that has never seen the project.
 
 ## What this is
 
-Exu trains encoder-only models that answer a **typed question** about a **state**
-with a probability distribution, in one forward pass, without generating text.
+Exu trains models that answer a **typed question** about a **state** with a
+probability distribution, in one forward pass, without generating text. The
+default backbone is a bidirectional encoder; a decoder backbone is an
+experimental second architecture (`--backbone decoder`).
 The training method it implements is RLCD, the name TypeSafe gives to the recipe
 behind its System One models: the term is theirs, the toolkit is this project's.
 
@@ -40,6 +42,8 @@ src/exu/          the package, all of it (there is no second source tree)
   types.py         DecisionQuestion / Option contract, the three primitives
   sequence.py      SequenceBuilder: one sequence per question, markers, token budget
   model.py         ExuModel: encoder + type embedding + 2 layers + scorer + act head
+  decoder.py       experimental: one decoder sequence per option, read at the last token
+  architecture.py  picks the model and the builder from a config (and so a checkpoint)
   scoring.py       log, spherical and ranked-probability scores; composite reward
   policy.py        perturbed-logit policy gradient, advantages, sigma schedule
   calibration.py   temperature fitting and the per-type/per-bucket map
@@ -86,14 +90,22 @@ checkpoints should be exercised end to end, not only unit tested.
 Changing one of these is an architecture decision, not a refactor. If a change
 touches them, say so explicitly instead of folding it into a small diff.
 
+Invariants 1 and 2 describe the encoder architecture. The decoder architecture
+(`decoder.py`) has its own pair, stated in its module docstring: one sequence per
+*option*, and the option's logit comes from the builder's own last token of that
+sequence. Everything after the logits is shared, and so are 3 to 8. Which
+architecture a checkpoint is lives in its `architecture` block and nowhere else.
+
 1. **One sequence per question.** N questions about the same state are a batch of
    N sequences; the state is re-encoded N times. That is why latency grows with
    the number of questions.
 2. **The marker is what the scorer reads.** It is the mask token the builder
    inserts before each option, and the option's logit comes from the hidden state
    at that position. Nothing else feeds the scorer.
-3. **Literal mask strings are stripped** from instruction, option and state text
-   before encoding. Without that, untrusted input can inject fake markers.
+3. **Literal special-token strings are stripped** from instruction, option and
+   state text before encoding: the mask string in the encoder path, every special
+   token of the tokenizer in the decoder path. Without that, untrusted input can
+   inject fake markers or a fake end of sequence.
 4. **The token budget fails loudly.** Options cede tokens before the instruction
    does, the instruction keeps a floor, and an option count that cannot fit
    raises `too many options for configured header_budget`. Do not replace that

@@ -95,11 +95,44 @@ recommendation.
 
 The encoder must be bidirectional and its tokenizer must have a mask token. The
 builder raises `tokenizer must provide mask_token_id` otherwise, which rules out
-decoder-only models and Electra-style encoders up front.
+decoder-only models and Electra-style encoders up front. A decoder goes through
+`--backbone decoder` instead, below.
 
 Measure before you commit. Tokenizer fertility on your own text decides how much
 state fits in the budget, and a checkpoint that is excellent in one language can
 collapse in another. See phase 2 of [exu-guide.md](exu-guide.md).
+
+### The experimental decoder
+
+`--backbone decoder` trains a causal model, `Qwen/Qwen3-0.6B` by default, with one
+sequence per option: `State: <state>`, the type, `Question: <instruction>`,
+`Candidate: <option>`, `Decision:` and the end-of-sequence token, read at that last
+token. Everything after the logits is the same as the encoder's.
+
+```bash
+uv run exu-train \
+  --mode baseline --backbone decoder \
+  --train data/tickets.jsonl --train-split train \
+  --validation data/tickets.jsonl --validation-split validation \
+  --calibration data/tickets.jsonl --calibration-split validation \
+  --output artifacts/decoder-baseline \
+  --epochs 1 --grad-checkpointing --calibrate
+```
+
+- One epoch at `--encoder-lr 1e-5` (the default with this backbone) is where the
+  runs in `BENCHMARKS.md` peaked; more epochs at a constant rate made them worse.
+- Cost: K sequences for a question with K options, in training and at inference.
+  The GoEmotions run (28 options) took an hour per epoch on an RTX 5090.
+- Memory: the 0.6B model was trained on 12 GB cards with `--grad-checkpointing`
+  and `--batch-size 4 --grad-accum 4`. 8 GB was not tried; weights, gradients and
+  AdamW state alone come to about 9.6 GB by arithmetic.
+- `--header-budget` is the room for everything but the state in one sequence. A
+  question whose longest option does not fit raises instead of being cut.
+- Options never see each other, so the answer cannot depend on their order:
+  `--option-shuffle` changes nothing and `stability` is 1.0 by construction.
+- `--scorer marker-cls` does not apply and is refused.
+- It is not immune to the uniform-guess plateau: on balanced BoolQ two seeds in
+  three stayed at `log 2`. If the first epoch ends there, try another seed.
 
 ## 3. Train the direct baseline
 
@@ -134,9 +167,11 @@ uv run exu-train \
 - `--device` defaults to `auto`: CUDA, then MPS, then CPU.
 
 Useful knobs, with their defaults: `--epochs 4`, `--batch-size 8`,
-`--grad-accum 1`, `--seed 17`, `--encoder-lr 2.5e-5`, `--head-lr 1e-4`,
-`--weight-decay 0.01`, `--max-grad-norm 1.0`, `--max-length 512`,
-`--header-budget 192`, `--calibration-min-samples 64`, `--log-every 0`.
+`--grad-accum 1`, `--seed 17`, `--encoder-lr 2.5e-5` (`1e-5` with
+`--backbone decoder`), `--head-lr 1e-4`, `--weight-decay 0.01`,
+`--max-grad-norm 1.0`, `--max-length 512`, `--header-budget 192` (or
+`--max-length`, if smaller), `--calibration-min-samples 64`, `--log-every 0`.
+`--grad-checkpointing` is off by default.
 
 ## 4. Train the policy
 
@@ -301,7 +336,8 @@ device/precision rules are in [checkpoints.md](checkpoints.md).
 | Symptom | Cause and what to do |
 | --- | --- |
 | `too many options for configured header_budget` | The question's options cannot fit the header. With the defaults, roughly 30 options is the ceiling. Raise `--header-budget` (and `--max-length` with it), or decide in two stages. |
-| `tokenizer must provide mask_token_id` | The encoder is decoder-only or has no mask token. Pick a bidirectional encoder that has one. |
+| `tokenizer must provide mask_token_id` | The encoder is decoder-only or has no mask token. Pick a bidirectional encoder that has one, or train it with `--backbone decoder`. |
+| `question takes N tokens without the state` | Decoder only: the instruction plus the longest option does not fit `--header-budget`. Raise it, with `--max-length`, or shorten the option texts. |
 | `each target distribution must sum to one` | Fix the `target` in the record named in the error. |
 | `output path already exists` | `--output` refuses to overwrite. Choose a new directory. |
 | Accuracy at chance, validation flat | Options are not distinguishable: texts too similar, too little description, or the budget squeezed them. Check the header budget and `--option-shuffle`, then the encoder. |

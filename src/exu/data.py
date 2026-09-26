@@ -34,7 +34,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from .sequence import SequenceBuilder
+from .sequence import DecisionBuilder
 from .types import DecisionQuestion, DecisionType, Option
 
 
@@ -109,26 +109,25 @@ class TrainingExample:
 
 @dataclass(frozen=True, slots=True)
 class TrainingBatch:
-    """Tensor batch for a model forward pass and a proper-scoring objective."""
+    """Tensor batch for a model forward pass and a proper-scoring objective.
 
-    input_ids: Tensor
-    attention_mask: Tensor
-    marker_positions: Tensor
-    option_mask: Tensor
-    question_type_ids: Tensor
+    ``inputs`` holds the model's keyword arguments exactly as the builder made
+    them. Their names depend on the architecture; ``option_mask`` is the one
+    every architecture has, and it is what the losses read.
+    """
+
+    inputs: Mapping[str, Tensor]
     targets: Tensor
     ordinal_mask: Tensor
     question_kinds: tuple[str, ...]
     question_families: tuple[str | None, ...] = ()
 
     def model_inputs(self) -> dict[str, Tensor]:
-        return {
-            "input_ids": self.input_ids,
-            "attention_mask": self.attention_mask,
-            "marker_positions": self.marker_positions,
-            "option_mask": self.option_mask,
-            "question_type_ids": self.question_type_ids,
-        }
+        return dict(self.inputs)
+
+    @property
+    def option_mask(self) -> Tensor:
+        return self.inputs["option_mask"]
 
     @property
     def option_counts(self) -> Tensor:
@@ -136,11 +135,7 @@ class TrainingBatch:
 
     def to(self, device: torch.device | str) -> TrainingBatch:
         return TrainingBatch(
-            input_ids=self.input_ids.to(device),
-            attention_mask=self.attention_mask.to(device),
-            marker_positions=self.marker_positions.to(device),
-            option_mask=self.option_mask.to(device),
-            question_type_ids=self.question_type_ids.to(device),
+            inputs={name: tensor.to(device) for name, tensor in self.inputs.items()},
             targets=self.targets.to(device),
             ordinal_mask=self.ordinal_mask.to(device),
             question_kinds=self.question_kinds,
@@ -149,12 +144,12 @@ class TrainingBatch:
 
 
 class DecisionDataset(Dataset[TrainingExample]):
-    """In-memory examples with a collator backed by :class:`SequenceBuilder`."""
+    """In-memory examples with a collator backed by a sequence builder."""
 
     def __init__(
         self,
         examples: Sequence[TrainingExample],
-        builder: SequenceBuilder,
+        builder: DecisionBuilder,
         transform: Callable[[TrainingExample], TrainingExample] | None = None,
     ) -> None:
         if not examples:
@@ -174,7 +169,6 @@ class DecisionDataset(Dataset[TrainingExample]):
         if not examples:
             raise ValueError("cannot collate an empty batch")
         encoded = [self.builder.build(example.state, example.question) for example in examples]
-        raw_batch = self.builder.pad(encoded)
         option_count = max(example.option_count for example in examples)
         targets = torch.zeros((len(examples), option_count), dtype=torch.float32)
         for index, example in enumerate(examples):
@@ -182,11 +176,7 @@ class DecisionDataset(Dataset[TrainingExample]):
                 example.target, dtype=torch.float32
             )
         return TrainingBatch(
-            input_ids=torch.tensor(raw_batch["input_ids"], dtype=torch.long),
-            attention_mask=torch.tensor(raw_batch["attention_mask"], dtype=torch.long),
-            marker_positions=torch.tensor(raw_batch["marker_positions"], dtype=torch.long),
-            option_mask=torch.tensor(raw_batch["option_mask"], dtype=torch.bool),
-            question_type_ids=torch.tensor(raw_batch["question_type_ids"], dtype=torch.long),
+            inputs=self.builder.tensors(encoded),
             targets=targets,
             ordinal_mask=torch.tensor(
                 [example.question.kind is DecisionType.SCORE for example in examples],

@@ -20,10 +20,10 @@ from typing import TYPE_CHECKING
 import torch
 from torch import Tensor
 
+from .architecture import builder_for
 from .calibration import TemperatureMap
 from .checkpoint import Checkpoint, load_checkpoint, load_tokenizer
 from .devices import resolve_device
-from .sequence import SequenceBuilder
 from .types import DecisionQuestion, DecisionType
 
 if TYPE_CHECKING:
@@ -58,7 +58,7 @@ class DecisionRuntime:
         self.model = checkpoint.model
         self.tokenizer = tokenizer
         self.device = device
-        self.builder = SequenceBuilder(tokenizer, checkpoint.sequence_config)
+        self.builder = builder_for(tokenizer, checkpoint.sequence_config, checkpoint.model_config)
         self.temperature: TemperatureMap = checkpoint.temperature
 
     @classmethod
@@ -75,20 +75,7 @@ class DecisionRuntime:
         if not pairs:
             raise ValueError("pairs cannot be empty")
         encoded = [self.builder.build(state, question) for state, question in pairs]
-        raw = self.builder.pad(encoded)
-        inputs = {
-            "input_ids": torch.tensor(raw["input_ids"], dtype=torch.long, device=self.device),
-            "attention_mask": torch.tensor(
-                raw["attention_mask"], dtype=torch.long, device=self.device
-            ),
-            "marker_positions": torch.tensor(
-                raw["marker_positions"], dtype=torch.long, device=self.device
-            ),
-            "option_mask": torch.tensor(raw["option_mask"], dtype=torch.bool, device=self.device),
-            "question_type_ids": torch.tensor(
-                raw["question_type_ids"], dtype=torch.long, device=self.device
-            ),
-        }
+        inputs = self.builder.tensors(encoded, self.device)
         temperatures = torch.tensor(
             [
                 self.temperature.temperature(question.kind.value, len(question.options))

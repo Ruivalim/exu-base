@@ -8,9 +8,12 @@ FIXTURES="${FIXTURES:-tests/fixtures/smoke.jsonl}"
 ARTIFACTS="${ARTIFACTS:-artifacts}"
 OUT="$ARTIFACTS/smoke"
 ENCODER_DIR="$ARTIFACTS/smoke-encoder"
+DECODER_OUT="$ARTIFACTS/smoke-decoder"
+DECODER_DIR="$ARTIFACTS/smoke-decoder-backbone"
 
-rm -rf "$OUT" "$ENCODER_DIR"
+rm -rf "$OUT" "$ENCODER_DIR" "$DECODER_OUT" "$DECODER_DIR"
 uv run python scripts/make_tiny_encoder.py "$ENCODER_DIR"
+uv run python scripts/make_tiny_decoder.py "$DECODER_DIR"
 
 uv run exu-train \
   --mode rlcd \
@@ -25,5 +28,23 @@ uv run exu-train \
 
 uv run exu-evaluate \
   --checkpoint "$OUT" \
+  --data "$FIXTURES" --split test \
+  --order-permutations 2 --device cpu
+
+# The experimental decoder path: one sequence per option, same pipeline after the
+# logits. Evaluation takes no flag for it; the checkpoint says which it is.
+uv run exu-train \
+  --mode baseline --backbone decoder \
+  --train "$FIXTURES" --train-split train \
+  --validation "$FIXTURES" --validation-split validation \
+  --test "$FIXTURES" --test-split test \
+  --calibration "$FIXTURES" --calibration-split calibration \
+  --output "$DECODER_OUT" \
+  --encoder "$DECODER_DIR" \
+  --epochs 3 --batch-size 4 --max-length 96 --encoder-lr 1e-3 --calibrate \
+  --calibration-min-samples 2 --device cpu
+
+uv run exu-evaluate \
+  --checkpoint "$DECODER_OUT" \
   --data "$FIXTURES" --split test \
   --order-permutations 2 --device cpu

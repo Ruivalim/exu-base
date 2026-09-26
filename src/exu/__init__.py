@@ -1,7 +1,7 @@
 """Exu: a toolkit for calibrated decision models.
 
-Encoder-only typed-decision models that return probability distributions instead
-of generated text, trained with a strictly proper scoring rule as the reward.
+Typed-decision models that return probability distributions instead of
+generated text, trained with a strictly proper scoring rule as the reward.
 
 Quick start::
 
@@ -21,6 +21,7 @@ Training is a CLI::
     exu-evaluate --checkpoint artifacts/my-checkpoint --data data.jsonl
 """
 
+from .architecture import DecisionModel, build_model, builder_for, model_from_pretrained
 from .calibration import (
     TemperatureFit,
     TemperatureMap,
@@ -29,6 +30,7 @@ from .calibration import (
 )
 from .checkpoint import Checkpoint, load_checkpoint, load_tokenizer, save_checkpoint
 from .data import DecisionDataset, TrainingBatch, TrainingExample, load_jsonl, write_jsonl
+from .decoder import DecoderDecisionModel, DecoderSequenceBuilder, EncodedOptions
 from .metrics import (
     DecisionMetrics,
     ReferencePrior,
@@ -61,19 +63,24 @@ from .scoring import (
     ranked_probability_score,
     spherical_score,
 )
-from .sequence import EncodedQuestion, SequenceBuilder, SequenceConfig
+from .sequence import DecisionBuilder, EncodedQuestion, SequenceBuilder, SequenceConfig
 from .types import DecisionQuestion, DecisionType, Option
 
 __all__ = [
     "ActionCosts",
     "Checkpoint",
     "Decision",
+    "DecisionBuilder",
     "DecisionDataset",
     "DecisionMetrics",
+    "DecisionModel",
     "DecisionOutput",
     "DecisionQuestion",
     "DecisionRuntime",
     "DecisionType",
+    "DecoderDecisionModel",
+    "DecoderSequenceBuilder",
+    "EncodedOptions",
     "EncodedQuestion",
     "Option",
     "PolicyConfig",
@@ -87,6 +94,8 @@ __all__ = [
     "TemperatureMap",
     "TrainingBatch",
     "TrainingExample",
+    "build_model",
+    "builder_for",
     "classification_metrics",
     "composite_score",
     "fit_temperature",
@@ -99,6 +108,7 @@ __all__ = [
     "log_score",
     "masked_log_softmax",
     "masked_softmax",
+    "model_from_pretrained",
     "policy_gradient_loss",
     "proper_scoring_loss",
     "prior_in_sample_baseline",

@@ -50,7 +50,13 @@ if TYPE_CHECKING:
     from transformers import PreTrainedModel
 
 DEFAULT_ENCODER = "google-bert/bert-base-multilingual-cased"
+DEFAULT_DECODER = "Qwen/Qwen3-0.6B"
 SCORERS = ("marker", "marker-cls")
+# The one readout each backbone has. An encoder that reads one sequence per option
+# (the [CLS] cross-encoder) was measured and dropped: it sits on the same plateau as
+# the markers and leaves it later. A decoder cannot read markers at all, because a
+# causal marker does not see the option text that follows it.
+READOUTS = {"encoder": "markers", "decoder": "per-option"}
 
 
 def masked_softmax(
@@ -203,8 +209,20 @@ class ExuConfig:
     temperature: float = 1.0
     action_costs: ActionCosts = field(default_factory=ActionCosts)
     scorer: str = "marker"
+    backbone: str = "encoder"
+    readout: str | None = None
 
     def __post_init__(self) -> None:
+        if self.backbone not in READOUTS:
+            raise ValueError(f"backbone must be one of {tuple(READOUTS)}")
+        if self.readout is None:
+            object.__setattr__(self, "readout", READOUTS[self.backbone])
+        if self.readout != READOUTS[self.backbone]:
+            raise ValueError(
+                f"a {self.backbone} backbone reads {READOUTS[self.backbone]!r}, not {self.readout!r}"
+            )
+        if self.backbone == "decoder" and self.scorer != "marker":
+            raise ValueError("the marker-cls scorer exists for the markers readout only")
         if self.num_decision_layers < 1:
             raise ValueError("num_decision_layers must be positive")
         if self.scorer not in SCORERS:
@@ -224,8 +242,20 @@ class ExuConfig:
             "scorer": self.scorer,
         }
 
+    def architecture(self) -> dict[str, str]:
+        """Which builder and which model read this configuration."""
+        return {"backbone": self.backbone, "readout": str(self.readout)}
+
     @classmethod
-    def from_dict(cls, data: Mapping[str, object]) -> ExuConfig:
+    def from_dict(
+        cls, data: Mapping[str, object], architecture: Mapping[str, object] | None = None
+    ) -> ExuConfig:
+        """Read a model block, and the architecture block stored beside it.
+
+        No architecture block means the encoder with markers: every checkpoint
+        written before a second architecture existed is one.
+        """
+        layout = architecture or {}
         raw_costs = data.get("action_costs", {})
         if not isinstance(raw_costs, Mapping):
             raise ValueError("action_costs must be an object")
@@ -237,6 +267,8 @@ class ExuConfig:
             action_costs=ActionCosts.from_dict(raw_costs),  # type: ignore[arg-type]
             # Checkpoints written before the option existed read at the markers only.
             scorer=str(data.get("scorer", "marker")),
+            backbone=str(layout.get("backbone", "encoder")),
+            readout=str(layout["readout"]) if "readout" in layout else None,
         )
 
 
@@ -255,6 +287,8 @@ class ExuModel(nn.Module):
     def __init__(self, encoder: PreTrainedModel, config: ExuConfig | None = None) -> None:
         super().__init__()
         self.config = config or ExuConfig()
+        if self.config.backbone != "encoder":
+            raise ValueError("ExuModel is the encoder with markers; use DecoderDecisionModel")
         self.encoder = encoder
         hidden_size = encoder.config.hidden_size
         if hidden_size >= 64 and hidden_size % 64:
@@ -294,11 +328,17 @@ class ExuModel(nn.Module):
             nn.Linear(hidden_size // 2, 2),
         )
 
+    @property
+    def backbone(self) -> PreTrainedModel:
+        """The pretrained network, under the name every architecture shares."""
+        return self.encoder
+
     @classmethod
     def from_pretrained(cls, config: ExuConfig | None = None) -> ExuModel:
         """Load base encoder weights. The decision head starts untrained."""
         settings = config or ExuConfig()
-        return cls(AutoModel.from_pretrained(settings.encoder_name), settings)
+        backbone = AutoModel.from_pretrained(settings.encoder_name, dtype=torch.float32)
+        return cls(backbone, settings)
 
     def forward(
         self,

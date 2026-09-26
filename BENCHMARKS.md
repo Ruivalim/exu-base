@@ -665,8 +665,11 @@ sequence per option, `State: <state> / type / Question: <instruction> / Candidat
 not loaded. Full fine-tune, no LoRA, float32 weights with bfloat16 autocast, AdamW
 with backbone lr `1e-5` and head lr `1e-4`, weight decay `0.01`, grad clip `1.0`,
 batch 8 with `--grad-accum 2`. Reward, calibration and metrics are the package's.
-Nothing here is in the package: `exu-train`, `exu-evaluate` and `exu-decide` do not
-know this path. Preliminary in every respect.
+These runs used a probe outside the package. Since then the same layout and head
+are the package's `--backbone decoder`: loaded into `DecoderDecisionModel`, the
+weights of the GoEmotions `sft` run below build token-identical sequences for all
+5,884 test questions and give the same uncalibrated test NLL, 1.84898 (package in
+float32 on an RTX 4060, probe in bfloat16 autocast). Preliminary in every respect.
 
 ### NLI, three seeds
 

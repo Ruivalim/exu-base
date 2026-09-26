@@ -6,7 +6,7 @@ import pytest
 from helpers import FIXTURES, SMOKE, tiny_encoder, tiny_tokenizer
 
 from exu.checkpoint import load_checkpoint, load_tokenizer
-from exu.train import _group_scale, build_parser, main
+from exu.train import _group_scale, build_parser, main, resolve_defaults
 
 
 def _encoder_dir(tmp_path):
@@ -42,7 +42,46 @@ def test_parser_defaults_to_rlcd_and_no_calibration() -> None:
 
     assert parser.get_default("mode") == "rlcd"
     assert parser.get_default("calibrate") is False
-    assert parser.get_default("encoder")
+    assert parser.get_default("backbone") == "encoder"
+
+
+def test_backbone_defaults_follow_the_backbone() -> None:
+    required = ["--train", "t", "--validation", "v", "--output", "o"]
+
+    encoder = resolve_defaults(build_parser().parse_args(required))
+    decoder = resolve_defaults(build_parser().parse_args([*required, "--backbone", "decoder"]))
+
+    assert encoder.encoder == "google-bert/bert-base-multilingual-cased"
+    assert encoder.encoder_lr == 2.5e-5
+    assert decoder.encoder == "Qwen/Qwen3-0.6B"
+    assert decoder.encoder_lr == 1e-5
+
+
+def test_explicit_flags_win_over_backbone_defaults() -> None:
+    args = build_parser().parse_args(
+        ["--train", "t", "--validation", "v", "--output", "o", "--backbone", "decoder",
+         "--encoder", "some/model", "--encoder-lr", "3e-6", "--header-budget", "64"]
+    )  # fmt: skip
+
+    resolve_defaults(args)
+
+    assert (args.encoder, args.encoder_lr, args.header_budget) == ("some/model", 3e-6, 64)
+
+
+def test_header_budget_never_exceeds_a_short_max_length() -> None:
+    args = build_parser().parse_args(
+        ["--train", "t", "--validation", "v", "--output", "o", "--max-length", "128"]
+    )
+
+    assert resolve_defaults(args).header_budget == 128
+
+
+def test_marker_cls_with_a_decoder_is_a_usage_error(tmp_path) -> None:
+    with pytest.raises(SystemExit):
+        main(
+            ["--train", "t", "--validation", "v", "--output", str(tmp_path / "out"),
+             "--backbone", "decoder", "--scorer", "marker-cls"]
+        )  # fmt: skip
 
 
 def test_baseline_mode_writes_a_reloadable_checkpoint(tmp_path) -> None:

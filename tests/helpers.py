@@ -116,3 +116,94 @@ def save_tiny_checkpoint(path, *, sequence=None, temperature=None):
         temperature=temperature or TemperatureMap(),
         tokenizer=tiny_tokenizer(),
     )
+
+
+# Words a decoder test may need, on top of the fixture's own. The builder's
+# scaffolding ("State:", "Question:", ...) is here so it tokenizes to real ids.
+_DECODER_WORDS = [
+    "state",
+    "question",
+    "candidate",
+    "decision",
+    "type",
+    "choice",
+    "ordinal",
+    "scale",
+    "yes",
+    "or",
+    "no",
+    "red",
+    "green",
+    "blue",
+    "gold",
+    "alpha",
+    "beta",
+    "do",
+    "the",
+    "two",
+    "colours",
+    "match",
+]
+
+
+def tiny_decoder_tokenizer():
+    """A real fast tokenizer, word level, built offline from the fixture's words.
+
+    It has an end-of-sequence and a padding token, as a decoder's does, and it
+    saves and loads like any Hugging Face tokenizer, so checkpoints round-trip.
+    """
+    import json
+
+    from tokenizers import Tokenizer, normalizers, pre_tokenizers
+    from tokenizers.models import WordLevel
+    from transformers import PreTrainedTokenizerFast
+
+    normalizer = normalizers.Lowercase()
+    splitter = pre_tokenizers.Whitespace()
+    words = set(_DECODER_WORDS)
+    for line in SMOKE.read_text(encoding="utf-8").splitlines():
+        record = json.loads(line)
+        question = record["question"]
+        texts = [record["state"], question["instruction"]]
+        texts += [
+            option["name"] + " " + option.get("description", "") for option in question["options"]
+        ]
+        for text in texts:
+            words.update(
+                piece for piece, _ in splitter.pre_tokenize_str(normalizer.normalize_str(text))
+            )
+    vocab = {
+        token: index for index, token in enumerate(["<pad>", "<eos>", "<unk>", *sorted(words)])
+    }
+    backend = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
+    backend.normalizer = normalizer
+    backend.pre_tokenizer = splitter
+    return PreTrainedTokenizerFast(
+        tokenizer_object=backend, eos_token="<eos>", pad_token="<pad>", unk_token="<unk>"
+    )
+
+
+def tiny_decoder(vocab_size: int):
+    from transformers import Qwen3Config, Qwen3Model
+
+    return Qwen3Model(
+        Qwen3Config(
+            vocab_size=vocab_size,
+            hidden_size=32,
+            intermediate_size=64,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=1,
+            head_dim=16,
+            max_position_embeddings=512,
+        )
+    )
+
+
+def tiny_decoder_model(tokenizer=None):
+    from exu import DecoderDecisionModel, ExuConfig
+
+    tokenizer = tokenizer or tiny_decoder_tokenizer()
+    return DecoderDecisionModel(
+        tiny_decoder(len(tokenizer)), ExuConfig(encoder_name="tiny-qwen", backbone="decoder")
+    )

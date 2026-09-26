@@ -7,6 +7,41 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- `--backbone decoder`, experimental: a causal backbone (default
+  `Qwen/Qwen3-0.6B`) read at the last token of one sequence per option, with the
+  layout and head of the probe that produced the decoder numbers in
+  `BENCHMARKS.md`. `DecoderDecisionModel`, `DecoderSequenceBuilder` and
+  `EncodedOptions` are public. The reward, calibration, evaluation, runtime and
+  CLIs are shared with the encoder.
+- `builder_for`, `build_model` and `model_from_pretrained` pick the builder and the
+  model from a configuration; `DecisionBuilder` is the protocol both builders meet.
+- `--grad-checkpointing` in `exu-train`, for either backbone.
+- `training.json` records the architecture and the backbone and head learning
+  rates.
+
+### Changed
+
+- Checkpoint format 2: `exu.json` carries an `architecture` block, and the loader
+  builds the model it names. Format 1 checkpoints still load, as the encoder with
+  markers. Weights of one architecture are refused under the other, with a message
+  saying which they look like.
+- `--encoder` and `--encoder-lr` default per backbone, and `--header-budget`
+  defaults to `--max-length` when that is below 192 instead of raising.
+- `TrainingBatch` holds the model's inputs as one `inputs` mapping, with
+  `option_mask` as a property, instead of one field per encoder tensor.
+  `SequenceBuilder.tensors` builds that mapping; the runtime and the evaluation
+  passes no longer build tensors by hand.
+
+### Fixed
+
+- A pretrained backbone loads in float32 whatever dtype it was published in.
+  transformers 5 keeps a checkpoint's own dtype, so a backbone published in
+  bfloat16, such as Qwen3, trained with bfloat16 master weights, where most updates
+  at a `1e-5` learning rate round away. Precision in the forward pass is still
+  autocast's.
+
 ## [0.1.0] - 2026-09-22
 
 First public release, under the name Exu. It is a toolkit: the training method it

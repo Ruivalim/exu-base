@@ -24,6 +24,7 @@ from pathlib import Path
 
 from torch.utils.data import DataLoader
 
+from .architecture import builder_for
 from .checkpoint import load_checkpoint, load_tokenizer
 from .data import DecisionDataset, TrainingBatch, load_jsonl
 from .devices import resolve_device
@@ -43,7 +44,6 @@ from .metrics import (
     stack_examples,
     uniform_baseline,
 )
-from .sequence import SequenceBuilder
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,7 +85,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     checkpoint = load_checkpoint(args.checkpoint, device=device)
     tokenizer = load_tokenizer(args.checkpoint)
-    builder = SequenceBuilder(tokenizer, checkpoint.sequence_config)
+    builder = builder_for(tokenizer, checkpoint.sequence_config, checkpoint.model_config)
     examples = load_jsonl(args.data, args.split)
     dataset = DecisionDataset(examples, builder)
     loader = _loader(dataset, args.batch_size)

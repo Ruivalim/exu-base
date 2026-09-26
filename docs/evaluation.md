@@ -115,6 +115,11 @@ permutation. `stability` close to 1 means the model reads the criteria. Laya
 changed its answer in 15% to 23% of cases, the signature of a
 model that learned position.
 
+On a `decoder` checkpoint `stability` is 1.0 by construction: every option is
+its own sequence, and none of them sees the others, so a permutation can only
+permute the answer. The number says nothing about that model; it is reported so
+the report has the same shape for both architectures.
+
 `score` questions are left out of this pass and counted in `skipped_ordinal`. The
 order of a scale is its meaning: `--option-shuffle` never shuffles it, the ranked
 probability score reads levels by position, and a permuted scale is not a scale. A
@@ -134,7 +139,9 @@ a human. The report includes the top 50% and top 80%.
 
 `--latency` measures p50 and p95 for 1, 5, 10 and 50 questions in one call. Latency
 grows with the number of questions because the state is re-encoded once per
-question, even in a batch. Measure on the hardware you will deploy on, not the
+question, even in a batch. A `decoder` checkpoint re-encodes it once per
+*option*: K sequences for a question with K options, so its latency grows with the
+option count too. Measure on the hardware you will deploy on, not the
 one you trained on.
 
 ## Before you claim a number

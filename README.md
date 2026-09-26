@@ -4,8 +4,8 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/ruivalim/exu-base/blob/main/LICENSE)
 
-Train encoder-only decision models that answer with **probability distributions**
-instead of generated text. You give a state and a question with explicit options;
+Train decision models that answer with **probability distributions** instead of
+generated text. You give a state and a question with explicit options;
 the model returns a distribution over those options in one forward pass.
 
 **Exu is a toolkit, not a method.** The training method it implements is RLCD,
@@ -177,6 +177,17 @@ strictly proper scoring rule. Then a temperature map, fitted on held-out data,
 brings confidence in line with accuracy.
 
 The full walkthrough is in
+That is the default, a bidirectional encoder. `--backbone decoder` is an
+experimental second architecture for causal models such as Qwen3: one sequence
+per option (`state, question, candidate`), read at its last token, with the same
+reward, calibration and evaluation after the logits. It costs K forward passes
+for a question with K options. Measured with Qwen3-0.6B, it has the best NLL on
+GoEmotions and on ChaosNLI, and it learned balanced NLI on every seed, where the
+encoder needs `--scorer marker-cls`. It is not immune to the uniform-guess
+plateau: on balanced BoolQ two seeds in three stayed at `log 2`. The numbers are
+in `BENCHMARKS.md`. The checkpoint records which architecture it is, so
+evaluation and inference take no flag for it.
+
 [docs/exu-guide.md](https://github.com/ruivalim/exu-base/blob/main/docs/exu-guide.md), and
 [docs/algorithm.md](https://github.com/ruivalim/exu-base/blob/main/docs/algorithm.md) has the
 reward and policy math.

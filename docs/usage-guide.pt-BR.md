@@ -98,11 +98,44 @@ recomendação.
 
 O encoder precisa ser bidirecional e o tokenizer dele precisa ter token de
 máscara. O builder levanta `tokenizer must provide mask_token_id` caso contrário,
-o que já elimina modelos decoder-only e encoders estilo Electra.
+o que já elimina modelos decoder-only e encoders estilo Electra. Um decoder entra
+por `--backbone decoder`, abaixo.
 
 Meça antes de casar. A fertilidade do tokenizer no seu texto decide quanto estado
 cabe no orçamento, e um checkpoint excelente numa língua pode desabar em outra.
 Veja a fase 2 do [exu-guide.pt-BR.md](exu-guide.pt-BR.md).
+
+### O decoder experimental
+
+`--backbone decoder` treina um modelo causal, `Qwen/Qwen3-0.6B` por default, com
+uma sequência por opção: `State: <estado>`, o tipo, `Question: <instrução>`,
+`Candidate: <opção>`, `Decision:` e o token de fim de sequência, lido nesse último
+token. Tudo depois dos logits é igual ao do encoder.
+
+```bash
+uv run exu-train \
+  --mode baseline --backbone decoder \
+  --train data/tickets.jsonl --train-split train \
+  --validation data/tickets.jsonl --validation-split validation \
+  --calibration data/tickets.jsonl --calibration-split validation \
+  --output artifacts/decoder-baseline \
+  --epochs 1 --grad-checkpointing --calibrate
+```
+
+- Uma época com `--encoder-lr 1e-5` (o default com esse backbone) foi o pico dos
+  runs do `BENCHMARKS.md`; mais épocas com taxa constante pioraram.
+- Custo: K sequências para uma pergunta com K opções, no treino e na inferência.
+  O run do GoEmotions (28 opções) levou uma hora por época numa RTX 5090.
+- Memória: o modelo de 0.6B foi treinado em placas de 12 GB com
+  `--grad-checkpointing` e `--batch-size 4 --grad-accum 4`. 8 GB não foi testado;
+  pesos, gradientes e estado do AdamW somam uns 9,6 GB só na conta.
+- `--header-budget` é o espaço para tudo menos o estado numa sequência. Uma
+  pergunta cuja opção mais longa não cabe levanta erro em vez de ser cortada.
+- As opções nunca se enxergam, então a resposta não pode depender da ordem:
+  `--option-shuffle` não muda nada e a `stability` é 1.0 por construção.
+- `--scorer marker-cls` não se aplica e é recusado.
+- Não é imune ao platô do chute uniforme: no BoolQ balanceado duas seeds em três
+  ficaram em `log 2`. Se a primeira época terminar ali, tente outra seed.
 
 ## 3. Treine o baseline direto
 
@@ -137,9 +170,11 @@ uv run exu-train \
 - `--device` é `auto` por padrão: CUDA, depois MPS, depois CPU.
 
 Botões úteis, com os defaults: `--epochs 4`, `--batch-size 8`, `--grad-accum 1`,
-`--seed 17`, `--encoder-lr 2.5e-5`, `--head-lr 1e-4`, `--weight-decay 0.01`,
-`--max-grad-norm 1.0`, `--max-length 512`, `--header-budget 192`,
-`--calibration-min-samples 64`, `--log-every 0`.
+`--seed 17`, `--encoder-lr 2.5e-5` (`1e-5` com `--backbone decoder`),
+`--head-lr 1e-4`, `--weight-decay 0.01`, `--max-grad-norm 1.0`,
+`--max-length 512`, `--header-budget 192` (ou o `--max-length`, se for menor),
+`--calibration-min-samples 64`, `--log-every 0`. O `--grad-checkpointing` vem
+desligado.
 
 ## 4. Treine a política
 
@@ -310,7 +345,8 @@ dispositivo e precisão estão em [checkpoints.md](checkpoints.md).
 | Sintoma | Causa e o que fazer |
 | --- | --- |
 | `too many options for configured header_budget` | As opções da pergunta não cabem no cabeçalho. Com os defaults, umas 30 opções é o teto. Aumente o `--header-budget` (e o `--max-length` junto), ou decida em duas etapas. |
-| `tokenizer must provide mask_token_id` | O encoder é decoder-only ou não tem token de máscara. Escolha um encoder bidirecional que tenha. |
+| `tokenizer must provide mask_token_id` | O encoder é decoder-only ou não tem token de máscara. Escolha um encoder bidirecional que tenha, ou treine com `--backbone decoder`. |
+| `question takes N tokens without the state` | Só no decoder: a instrução mais a opção mais longa não cabem no `--header-budget`. Aumente ele, junto com o `--max-length`, ou encurte os textos das opções. |
 | `each target distribution must sum to one` | Corrija o `target` do registro citado no erro. |
 | `output path already exists` | O `--output` se recusa a sobrescrever. Escolha um diretório novo. |
 | Acurácia no chute, validação parada | As opções não se distinguem: textos parecidos demais, descrição de menos, ou o orçamento espremeu. Confira o orçamento de cabeçalho e o `--option-shuffle`, depois o encoder. |
