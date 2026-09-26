@@ -5,7 +5,7 @@ a published result of someone else, and nothing is tuned to look good: the proje
 is pre-alpha, the runs are small, and several of them say the toolkit's headline
 method loses to its own baseline.
 
-Last updated 2026-09-25.
+Last updated 2026-09-26.
 
 ## How to read this file
 
@@ -32,6 +32,7 @@ Last updated 2026-09-25.
 | --- | --- |
 | Training machine | 2x NVIDIA RTX 3060 12 GB, one job per GPU |
 | Rented machine, section 9 | 1x NVIDIA RTX 5090 32 GB, up to four jobs sharing the card |
+| Training machine, section 12 | the same 2x RTX 3060 12 GB, one job per GPU, bfloat16 base |
 | Rented machines, section 11 | 1x NVIDIA A40 48 GB or RTX 3090 24 GB, RunPod secure cloud, one job at a time |
 | Probe machine | 1x NVIDIA RTX 4060 8 GB, shared with a desktop session |
 | Precision | bfloat16 autocast, log term of the reward always in float32 |
@@ -898,6 +899,74 @@ uv run exu-train --backbone decoder --mode baseline \
   --epochs 2 --batch-size 8 --grad-accum 2 --max-length 128 --grad-checkpointing \
   --calibrate --seed 17 --output artifacts/teacher-baseline-s17
 ```
+
+## 12. A larger base read through its own labels, 2026-09-26
+
+Prompted by Mica v0.1 4B ([akivet/Mica-v0.1-4B](https://github.com/akivet/Mica-v0.1-4B),
+Apache-2.0), a fine-tune of `Qwen/Qwen3.5-4B` that reads a decision out of the
+language-model head: every option gets a one-token label (`A`, `B`, ..., or `No` /
+`Yes` for a `noul`), all options sit in one prompt, and the distribution is the
+softmax of those label logits at the answer position. One sequence per question, no
+new head. Nothing here is in the package: these are probes outside the repository,
+run with the package's metrics and calibration, and the prompt is Mica's own
+rendering code, run from its repository.
+
+Test NLL calibrated, temperatures fitted on the calibration split (up to 1,000
+rows). Batch 1, bfloat16, reference PyTorch kernels for the Gated DeltaNet layers.
+
+### Zero-shot, no training
+
+GoEmotions and Measuring Hate Speech on a seeded sample of 2,000 test rows (prior on
+the sample 2.8355 and 1.2853), ChaosNLI and BoolQ on the whole test split.
+
+| Model | GoEmotions | ChaosNLI | BoolQ | Measuring Hate Speech |
+| --- | --- | --- | --- | --- |
+| `prior` | 2.8355 | 1.0982 | 0.6630 | 1.2853 |
+| `Qwen3-0.6B` | 3.3420 (T at bound) | 1.1675 (T at bound) | 0.6746 (T at bound) | 1.4804 (T at bound) |
+| `Qwen3.5-0.8B` | 3.0704 | 1.0417 | 0.6073 | 1.4126 |
+| `Qwen3.5-2B` | 3.2538 | 1.0140 | 0.5197 | 1.4130 |
+| `Qwen3.5-4B` | 2.7906 | **0.9524** | 0.4482 | **1.2153** |
+| Mica v0.1 4B (revision `ca36594`) | **2.6304** | 0.9636 | **0.3277** | 1.2961 |
+
+- The current decoder base, `Qwen3-0.6B`, cannot be read this way: every fitted
+  temperature sits on the upper bound (10) and every NLL is above `prior`.
+- Untrained, `Qwen3.5-4B` already beats every trained model in this file on
+  ChaosNLI (0.9524 against 0.9979 for the section 10 decoder). On the two tasks whose
+  target is one population's taste, GoEmotions and Measuring Hate Speech, zero-shot
+  stays near `prior`.
+- Order: with the options reversed, the top answer stays the same on 63% (GoEmotions)
+  and 76% (ChaosNLI) of rows for `Qwen3.5-4B`, 74% and 97% for Mica, and below chance
+  on ChaosNLI for the 0.8B and 2B models, which pick a position more than an answer.
+- Every model is overconfident zero-shot: fitted temperatures 1.0 to 4.5 wherever
+  the fit did not hit the bound.
+
+### LoRA fine-tune, one seed
+
+`Qwen3.5-4B` frozen in bfloat16, a rank-16 LoRA (alpha 32, float32) on the attention
+and Gated DeltaNet projections (`q/k/v/o_proj`, `in_proj_qkv/z/a/b`, `out_proj`;
+14.4M trainable), the log score against the soft target over the label logits,
+`choice` options shuffled per example. 8,500 training rows per dataset (all 8,473 for
+BoolQ), one epoch, batch 16, lr `1e-4` with 5% warmup and linear decay, seed 17.
+About 1.5 rows per second and 8.7 GiB peak on an RTX 3060, 81 to 100 minutes per
+dataset. Whole test splits.
+
+| Dataset | LoRA 4B, 8,500 rows | Best trained model above | Its training rows |
+| --- | --- | --- | --- |
+| GoEmotions | 1.8474 | **1.8417 ± 0.0019** (decoder, section 10) | 46,370 |
+| ChaosNLI | **0.9305** | 0.9979 ± 0.0139 (decoder, section 10) | 16,000 |
+| BoolQ | **0.2139** (accuracy 0.916) | 0.3963 (decoder seed 17; 0.5214 and 0.6324 on the others) | 8,473 |
+| Measuring Hate Speech | **1.0232** (RPS 0.0439) | 1.0515 ± 0.0043 (`bert-base-uncased`, RPS 0.0486) | 55,656 |
+
+- With the same or fewer training rows (the same on BoolQ, about half on ChaosNLI, a
+  sixth on Measuring Hate Speech), the adapter wins three of four and ties
+  GoEmotions, 0.006 behind a model trained on 5.5 times its data (and 0.018 ahead of
+  the section 10 decoder on 16,000 rows).
+- Shuffling the options in training removes most of the order effect: the top answer
+  survives reversal on 91% (GoEmotions) and 94% (ChaosNLI) of rows.
+- Fitted temperatures 0.99 to 1.22, except ChaosNLI at 3.3: trained on MultiNLI's
+  hard labels and tested on ChaosNLI's spread, as the encoders were in section 9.
+- One seed against three on most rows of the other side. Latency was not measured:
+  one 4B prefill per question against K prefills of 0.6B has no obvious winner.
 
 ## What has not been measured
 
