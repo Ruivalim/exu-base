@@ -210,6 +210,10 @@ def rsync_pull(
     return [*command, f"root@{endpoint[0]}:{REMOTE_DIR}/{remote.rstrip('/')}/", f"{local}/"]
 
 
+# Standard output of the container's first process: the RunPod console's log view.
+CONTAINER_LOG = "/proc/1/fd/1"
+
+
 def remote_job(
     command: str,
     *,
@@ -217,8 +221,15 @@ def remote_job(
     stop_after: bool,
     grace_minutes: float = 15,
     stop_command: str = STOP_SELF,
+    container_log: str = CONTAINER_LOG,
 ) -> str:
     """Shell that runs `command` detached on the pod, time-limited, then stops the pod.
+
+    The output goes to `run.log`, which `logs` reads over ssh, and to the standard
+    output of the container's first process, which is what the RunPod console shows
+    as the pod's logs. A job started over ssh is not a child of that process, so it
+    writes to the descriptor directly. Where the descriptor is not writable (outside
+    a container, or not root) the job runs with the file alone rather than failing.
 
     `run.done` holds the exit code once the job ends. The pod only stops after the
     grace period: a stopped pod has no ssh, so this is the window to fetch results.
@@ -239,9 +250,17 @@ def remote_job(
         'else echo "a job is still running on the pod: see logs" >&2; exit 3; fi; fi; '
         "[ -f run.log ] && mv -f run.log run.previous.log"
     )
+    # The job keeps its own `bash -c`, so `$$` in it is the pid the guard kills. The tee
+    # sits inside the nohup: left outside, it dies with the ssh session and the job's next
+    # write is a SIGPIPE.
+    sink = shlex.quote(container_log)
+    fanout = (
+        f"sink=/dev/null; [ -w {sink} ] && sink={sink}; "
+        f'bash -c {shlex.quote(job)} 2>&1 | tee run.log > "$sink"'
+    )
     # The parentheses matter: `cd && nohup ... &` backgrounds the whole list in a subshell
     # that keeps the ssh channel open, and the local command hangs until the job ends.
-    detached = f"nohup bash -c {shlex.quote(job)} > run.log 2>&1 < /dev/null &"
+    detached = f"nohup bash -c {shlex.quote(fanout)} > /dev/null 2>&1 < /dev/null &"
     return f"cd {REMOTE_DIR} && {{ {guard}; ({detached}); }}"
 
 
@@ -265,13 +284,26 @@ def offer_rows(answer: dict[str, Any]) -> list[tuple[float, str, int, str, int, 
     return sorted(rows)
 
 
+# What `_call(..., missing_ok=True)` returns for a 404.
+MISSING = object()
+
+
 class RunPod:
     def __init__(self, key: str, *, transport: Transport = http, state: Path = STATE) -> None:
         self._key = key
         self._transport = transport
         self.state = state
 
-    def _call(self, method: str, path: str, body: Any = None, *, url: str | None = None) -> Any:
+    def _call(
+        self,
+        method: str,
+        path: str,
+        body: Any = None,
+        *,
+        url: str | None = None,
+        missing_ok: bool = False,
+    ) -> Any:
+        """The API's answer; with `missing_ok`, a 404 comes back as MISSING instead."""
         headers = {
             "Authorization": f"Bearer {self._key}",
             "Content-Type": "application/json",
@@ -279,6 +311,8 @@ class RunPod:
             "User-Agent": "exu-runpod/0.1",
         }
         status, answer = self._transport(method, url or API + path, headers, body)
+        if status == 404 and missing_ok:
+            return MISSING
         if status >= 400:
             detail = json.dumps(answer)[:300].replace(self._key, "<key>")
             raise SystemExit(f"RunPod answered {status} to {method} {path}: {detail}")
@@ -360,7 +394,13 @@ class RunPod:
         identifier = self.recorded()
         if identifier is None:
             raise SystemExit(f"no pod recorded in {self.state}")
-        self._call("DELETE", f"/pods/{identifier}")
+        if self._call("DELETE", f"/pods/{identifier}", missing_ok=True) is MISSING:
+            # Terminated from the console, say. A 404 alone could be the wrong URL, and
+            # forgetting a pod that still bills is the expensive mistake, so the account
+            # listing has to agree before the record goes.
+            if any(pod.get("id") == identifier for pod in self.list()):
+                raise SystemExit(f"pod {identifier} answered 404 but is still listed: kept")
+            print(f"pod {identifier} was already gone: forgetting the record")
         self.state.unlink()
 
 

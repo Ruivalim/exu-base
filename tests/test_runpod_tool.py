@@ -219,6 +219,32 @@ def test_down_keeps_the_record_when_the_api_refuses(tmp_path) -> None:
     assert pods.state.exists()
 
 
+def test_down_forgets_a_pod_already_terminated_elsewhere(tmp_path) -> None:
+    # Found for real: a pod terminated from the console left a record that blocked `up`.
+    pods, _api = client(tmp_path, {
+        ("DELETE", "/pods/abc123"): (404, {"error": "pod not found to terminate"}),
+        ("GET", "/pods"): (200, [{"id": "other"}]),
+    })  # fmt: skip
+    pods.state.write_text(json.dumps({"id": "abc123"}), encoding="utf-8")
+
+    pods.down()
+
+    assert not pods.state.exists()
+
+
+def test_down_keeps_a_record_the_listing_still_shows(tmp_path) -> None:
+    pods, _api = client(tmp_path, {
+        ("DELETE", "/pods/abc123"): (404, {"error": "not found"}),
+        ("GET", "/pods"): (200, [{"id": "abc123"}]),
+    })  # fmt: skip
+    pods.state.write_text(json.dumps({"id": "abc123"}), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="still listed"):
+        pods.down()
+
+    assert pods.state.exists()
+
+
 def test_an_api_error_never_prints_the_key(tmp_path) -> None:
     pods, _api = client(tmp_path, {("GET", "/pods"): (401, {"error": f"bad key {SECRET}"})})
 
@@ -421,6 +447,37 @@ def test_the_pod_finds_its_own_id_before_stopping_itself() -> None:
     assert stop.index("runpodctl config") < stop.index("runpodctl stop pod")
     assert "&&" not in stop, "config exits 1 after saving, the stop must still run"
     assert runpod_gpu.STOP_SELF in runpod_gpu.remote_job("x", max_hours=1, stop_after=True)
+
+
+def test_the_job_output_reaches_the_log_file_and_the_container_log(tmp_path) -> None:
+    container = tmp_path / "container.log"
+    container.touch()
+
+    done = _launch(tmp_path, "echo training; echo broken >&2", stop_after=False,
+                   container_log=str(container))  # fmt: skip
+
+    assert done.returncode == 0
+    _wait_for(tmp_path / "run.done")
+    time.sleep(0.2)  # tee flushes after the job writes run.done
+    for path in (tmp_path / "run.log", container):
+        text = path.read_text(encoding="utf-8")
+        assert "training" in text and "broken" in text, path.name
+
+
+def test_an_unwritable_container_log_leaves_the_job_on_the_file_alone(tmp_path) -> None:
+    missing = tmp_path / "no-such-dir" / "stdout"
+
+    done = _launch(tmp_path, "echo training", stop_after=False, container_log=str(missing))
+
+    assert done.returncode == 0
+    _wait_for(tmp_path / "run.done")
+    assert (tmp_path / "run.done").read_text(encoding="utf-8").strip() == "0"
+    time.sleep(0.2)
+    assert "training" in (tmp_path / "run.log").read_text(encoding="utf-8")
+
+
+def test_the_container_log_defaults_to_the_first_process_output() -> None:
+    assert "/proc/1/fd/1" in runpod_gpu.remote_job("x", max_hours=1, stop_after=False)
 
 
 def test_the_remote_job_can_leave_the_pod_running() -> None:
