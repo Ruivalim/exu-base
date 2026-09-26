@@ -84,7 +84,7 @@ fraud = DecisionQuestion.noul("Is this message attempting fraud?")
 
 ```bash
 exu-train \
-  --mode rlcd \
+  --mode baseline \
   --train data/train.jsonl --train-split train \
   --validation data/train.jsonl --validation-split validation \
   --test data/train.jsonl --test-split test \
@@ -94,15 +94,16 @@ exu-train \
   --epochs 4 --batch-size 8 --option-shuffle --calibrate
 ```
 
-`--mode rlcd` uses the perturbed-logit policy. `--mode baseline` optimizes the
-same strictly proper score directly, with no sampling. Train the baseline first:
-it is the bar the RLCD mode has to beat on held-out NLL. So far it has not been
-beaten: in every comparison measured on real data (eight, across three backbones
+Use `--mode baseline`. It optimizes the strictly proper score directly, with no
+sampling, and it is what we recommend for a model you mean to use. `--mode rlcd`
+adds the perturbed-logit policy gradient and stays in the package as the method
+under evaluation: it has to beat the baseline on held-out NLL, and so far it has
+not. In every comparison measured on real data (fourteen, across three backbones
 and three datasets, see BENCHMARKS.md) the direct baseline was as good or better,
-and RLCD made confident misses ten to a hundred times more often. Start with
-`--mode baseline`; treat `--mode rlcd` as the method under evaluation, not the
-default. The setting its authors report gains in, soft targets from a teacher
-model, has not been tested here.
+and RLCD made confident misses more often. That includes the setting its authors
+report gains in, soft targets from a teacher model, measured on one dataset. What
+remains untested is a reward per sampled answer with no target distribution, such
+as a judge.
 
 The step-by-step version, from writing the records to reading the report and the
 failure modes, is [docs/usage-guide.md](https://github.com/ruivalim/exu-base/blob/main/docs/usage-guide.md).
@@ -176,7 +177,6 @@ perturbations of the logits and rewards each candidate distribution with a
 strictly proper scoring rule. Then a temperature map, fitted on held-out data,
 brings confidence in line with accuracy.
 
-The full walkthrough is in
 That is the default, a bidirectional encoder. `--backbone decoder` is an
 experimental second architecture for causal models such as Qwen3: one sequence
 per option (`state, question, candidate`), read at its last token, with the same
@@ -188,6 +188,7 @@ plateau: on balanced BoolQ two seeds in three stayed at `log 2`. The numbers are
 in `BENCHMARKS.md`. The checkpoint records which architecture it is, so
 evaluation and inference take no flag for it.
 
+The full walkthrough is in
 [docs/exu-guide.md](https://github.com/ruivalim/exu-base/blob/main/docs/exu-guide.md), and
 [docs/algorithm.md](https://github.com/ruivalim/exu-base/blob/main/docs/algorithm.md) has the
 reward and policy math.

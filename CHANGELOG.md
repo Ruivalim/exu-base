@@ -33,6 +33,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `option_mask` as a property, instead of one field per encoder tensor.
   `SequenceBuilder.tensors` builds that mapping; the runtime and the evaluation
   passes no longer build tensors by hand.
+- The README recommends `--mode baseline` and its training example uses it.
+  `--mode rlcd` stays, as the method under evaluation: it lost all fourteen
+  comparisons in `BENCHMARKS.md`, teacher-model targets included (section 11).
 
 ### Fixed
 

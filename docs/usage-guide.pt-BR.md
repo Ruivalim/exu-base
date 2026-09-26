@@ -199,8 +199,9 @@ Os defaults são a receita do fine-tune: 4 amostras por pergunta, sigma caindo d
 pelo lote inteiro. O `PolicyConfig.base()` guarda a receita do treino base: 8
 amostras, sigma de 1.0 a 0.3, sem cross-entropy.
 
-Só mantenha a política se ela bater o baseline em ECE ou NLL no held-out. Muitas
-vezes não bate, e isso é um resultado, não um fracasso. A leitura crítica do
+Só mantenha a política se ela bater o baseline em ECE ou NLL no held-out. Nas
+catorze comparações do `BENCHMARKS.md` ela nunca bateu em NLL, alvo de modelo
+professor incluído, e isso é um resultado, não um fracasso. A leitura crítica do
 porquê está no fim da fase 7 do [exu-guide.pt-BR.md](exu-guide.pt-BR.md).
 
 ## 5. Leia o relatório de treino

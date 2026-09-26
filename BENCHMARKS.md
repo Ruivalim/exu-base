@@ -5,7 +5,7 @@ a published result of someone else, and nothing is tuned to look good: the proje
 is pre-alpha, the runs are small, and several of them say the toolkit's headline
 method loses to its own baseline.
 
-Last updated 2026-09-22.
+Last updated 2026-09-25.
 
 ## How to read this file
 
@@ -23,7 +23,8 @@ Last updated 2026-09-22.
   a weak test: read a tie as a tie.
 - **One dataset, one encoder, three epochs** unless a section says otherwise. None of
   this is a verdict on RLCD in general. The setting its authors report gains in,
-  fine-tuning on teacher-model soft targets, was not tested.
+  fine-tuning on teacher-model soft targets, is section 11, on one dataset and one
+  backbone.
 
 ## Setup
 
@@ -31,6 +32,7 @@ Last updated 2026-09-22.
 | --- | --- |
 | Training machine | 2x NVIDIA RTX 3060 12 GB, one job per GPU |
 | Rented machine, section 9 | 1x NVIDIA RTX 5090 32 GB, up to four jobs sharing the card |
+| Rented machines, section 11 | 1x NVIDIA A40 48 GB or RTX 3090 24 GB, RunPod secure cloud, one job at a time |
 | Probe machine | 1x NVIDIA RTX 4060 8 GB, shared with a desktop session |
 | Precision | bfloat16 autocast, log term of the reward always in float32 |
 | Main encoder | `google-bert/bert-base-uncased` |
@@ -576,13 +578,13 @@ its gradient points at it. The policy gradient is a noisy estimate of that same
 gradient with the bias of the sigma-smoothed optimum on top (section 8), so at best
 it ties, and the confident-miss rates say it does not reach the tie. The setting in
 which a policy gradient earns its place is the one with no target, only a reward
-per sampled answer: a judge, a preference, a teacher model. That is the setting the
-method's authors report gains in, and nothing here tests it. Scale is not the
-missing piece on its own: the gap did not shrink from 16,000 to 46,370 rows, nor
-from 110M to 600M parameters. What scale can change is the availability of such
-targets. A cheap test is in the working notes: a language model as teacher on a few
-thousand GoEmotions comments, both modes trained against its distribution, scored
-against the raters.
+per sampled answer: a judge, a preference. Scale is not the missing piece on its
+own: the gap did not shrink from 16,000 to 46,370 rows, nor from 110M to 600M
+parameters. What scale can change is the availability of such targets. Section 11
+runs the nearest cheap test, a language model as teacher on 5,000 GoEmotions
+comments, which is the setting the method's authors report gains in. RLCD lost
+there too, but that teacher hands over a whole distribution, so the direct loss
+still has its target and the reward-only setting stays untested.
 
 ### Encoders at full size
 
@@ -820,11 +822,90 @@ Bars: `prior` NLL 0.663 on the natural split, 0.6931 on the balanced one.
   A per-option readout vector built from the candidate text, the idea behind
   `marker-cls`, is the untested remedy for this path.
 
+## 11. RLCD against a teacher model's targets, 2026-09-24
+
+The setting the method's authors report gains in: fine-tuning on soft targets
+produced by a teacher model instead of by people. 5,000 comments sampled with a
+fixed seed from the GoEmotions training split, in two datasets that differ only in
+the training targets. `human` keeps the raters' share of marks per label. `teacher`
+replaces it with what `gpt-6-luna` (through the `codex` CLI) estimated for the same
+quantity: the share of marks a group of annotators would give each of the 28
+emotions. Validation, calibration and test are the full human splits in both
+(2,869 / 2,886 / 5,884), so every arm is calibrated and scored against the raters.
+A first teacher, `claude-sonnet-4-6`, ran out of quota after 400 comments and was
+dropped: a dataset uses one teacher, never a mix.
+
+The teacher is weak on this task. Its top label matches the raters' top label on
+31% of the training comments, and its targets are flatter (mean entropy 1.21
+against 0.86).
+
+Qwen3-0.6B through the package, `exu-train --backbone decoder`, two epochs, batch 8
+with `--grad-accum 2`, `--max-length 128`, `--grad-checkpointing`, backbone lr
+`1e-5`, head lr `1e-4`, RLCD with its defaults. About 44 minutes per arm on the A40
+and on the RTX 3090 in bfloat16, 68 on the RTX 3090 in float32.
+
+The `bf16` rows ran with a bug since fixed: the package loaded Qwen3 in its
+published dtype, bfloat16, and trained with bfloat16 master weights, where most
+updates at a `1e-5` learning rate round away. The backbone now always loads in
+float32, with bfloat16 only as autocast, and seed 17 was rerun that way. Seed 42 was
+not run.
+
+| Target | Mode | Run | Test NLL | Brier | Accuracy | ECE | Confident-miss rate, last epoch |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| human | baseline | bf16, seed 17 | **1.9495** | **0.232** | **0.528** | 0.083 | 0 |
+| human | RLCD | bf16, seed 17 | 2.0100 | 0.245 | 0.511 | 0.071 | 1.4e-04 |
+| human | baseline | bf16, seed 23 | **1.9455** | **0.233** | **0.530** | 0.102 | 0 |
+| human | RLCD | bf16, seed 23 | 2.0044 | 0.245 | 0.511 | 0.118 | 4.9e-04 |
+| human | baseline | fp32, seed 17 | **1.9228** | **0.229** | **0.550** | 0.118 | 0 |
+| human | RLCD | fp32, seed 17 | 2.0088 | 0.239 | 0.518 | 0.097 | 4.2e-04 |
+| teacher | baseline | bf16, seed 17 | **2.3106** | **0.325** | **0.389** | 0.128 | 1.0e-04 |
+| teacher | RLCD | bf16, seed 17 | 2.3533 | 0.335 | 0.366 | 0.115 | 3.6e-04 |
+| teacher | baseline | bf16, seed 23 | **2.2808** | **0.316** | **0.392** | 0.114 | 0 |
+| teacher | RLCD | bf16, seed 23 | 2.3303 | 0.329 | 0.368 | 0.107 | 7.2e-04 |
+| teacher | baseline | fp32, seed 17 | **2.3687** | **0.340** | **0.368** | 0.129 | 1.0e-03 |
+| teacher | RLCD | fp32, seed 17 | 2.3908 | 0.341 | 0.354 | 0.127 | 2.6e-03 |
+
+Test numbers calibrated, from `training.json`. The confident-miss rate is measured
+on the training targets, so on the teacher's for the teacher arms. Bars on the same
+test split: `uniform` NLL 3.3322, `prior` 2.8269 fitted on the human training
+targets (2.9522 on the teacher's), majority class accuracy 0.293.
+
+- RLCD loses all six pairs, by 0.022 to 0.086 of NLL, and does no better on Brier or
+  accuracy in any of them. With sections 9 and 10 that is fourteen comparisons on
+  three backbones, none won.
+- Its calibrated ECE is lower in five of the six pairs. ECE here compares against
+  the top label only; the proper scores decide, and they go the other way.
+- Against the teacher's targets RLCD makes confident misses more often in every
+  pair, as it did against human targets in sections 9 and 10.
+- The teacher costs every arm 0.33 to 0.45 of NLL against the human arm of the same
+  mode and run. All twelve arms beat `prior` by a wide margin, so the teacher arms
+  learned something, just less of what the raters do.
+- Float32 moved the human baseline down by 0.027 and the teacher baseline up by
+  0.058, on one seed each. That does not settle which precision trains better here;
+  the fix stands on the rounding argument above. The gap between the modes kept its
+  sign in both.
+- What this does not test. The teacher returned a whole distribution per comment,
+  so the direct loss had the full target and is the optimal estimator again, as in
+  section 9. A policy gradient has no direct alternative only when there is a
+  reward per sampled answer and no distribution, a judge or a preference, and that
+  was not run.
+
+```bash
+D=path/to/goemotions-teacher-5000.jsonl
+uv run exu-train --backbone decoder --mode baseline \
+  --train $D --train-split train --validation $D --validation-split validation \
+  --calibration $D --calibration-split calibration --test $D --test-split test \
+  --epochs 2 --batch-size 8 --grad-accum 2 --max-length 128 --grad-checkpointing \
+  --calibrate --seed 17 --output artifacts/teacher-baseline-s17
+```
+
 ## What has not been measured
 
-- RLCD with teacher-model soft targets, which is where its authors report gains.
-- RLCD as a second stage on top of a model already trained in baseline mode. Every
-  RLCD run so far started from a fresh head.
+- RLCD with a reward per sampled answer and no target distribution (a judge, a
+  preference), the one setting where a policy gradient has no direct alternative.
+  Section 11's teacher still gave whole distributions.
+- RLCD as a second stage after a shorter first stage, while the model still has
+  room. Section 10's second stage started at the peak.
 - More epochs, another sigma schedule, another learning rate.
 - A decoder backbone beyond section 10: more than one epoch with a decaying
   learning rate, a shorter first stage before RLCD, a prefix shared across the K

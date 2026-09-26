@@ -196,8 +196,9 @@ Defaults are the fine-tune recipe: 4 samples per question, sigma annealing from
 normalization. `PolicyConfig.base()` holds the base-training recipe instead: 8
 samples, sigma 1.0 to 0.3, no cross-entropy.
 
-Keep the policy only if it beats the baseline on held-out ECE or NLL. It often
-does not, and that is a result, not a failure. The critical reading of why is at
+Keep the policy only if it beats the baseline on held-out ECE or NLL. In the
+fourteen comparisons in `BENCHMARKS.md` it never beat it on NLL, teacher-model
+targets included, and that is a result, not a failure. The critical reading of why is at
 the end of phase 7 of [exu-guide.md](exu-guide.md).
 
 ## 5. Read the training report
