@@ -991,8 +991,47 @@ side had used many more: the comparison at equal data.
   one RTX 3060, 1.6 to 1.8 rows per second, 8.7 GiB peak. One GoEmotions row above
   1,024 tokens was skipped. Temperatures 1.01 and 1.04; the top answer survives
   reversal on 94% of GoEmotions rows.
-- Latency was not measured: one 4B prefill per question against K prefills of 0.6B
-  has no obvious winner. Neither was one adapter trained on all four datasets.
+- One adapter trained on all four datasets has not been run.
+
+### Fast kernels and latency, 2026-09-27
+
+Every run above used the reference PyTorch implementation of the Gated DeltaNet
+layers. `flash-linear-attention` (0.5.2, Triton) replaces it without code changes;
+`causal-conv1d` was not installed, since the convolution it would replace is a
+depthwise `conv1d` of width 4.
+
+Equivalence. On 300 seeded test rows with a trained adapter, the label logits differ
+by at most 0.125 (0.25 on one row), one bfloat16 step at their magnitude; the top
+answer is unchanged on 300 of 300 ChaosNLI rows and 294 of 300 GoEmotions rows, the
+six flips being near-ties among 28 options. Trained end to end with the kernels, same
+rows and seed 17, whole test split:
+
+| Dataset | Reference kernels | `flash-linear-attention` | Seed spread (section above) |
+| --- | --- | --- | --- |
+| BoolQ | 0.2139 | 0.2138 | ± 0.0033 |
+| Measuring Hate Speech | 1.0232 | 1.0235 | ± 0.0033 |
+
+Speed on one RTX 3060: training runs 1.4 to 1.6 times faster (BoolQ 1.4 to 2.2 rows
+per second, 100 to 64 minutes; Measuring Hate Speech 1.8 to 2.5, 79 to 56 minutes),
+at 8.3 to 8.5 GiB peak against 8.4 to 8.8.
+
+Latency per question, batch 1, CUDA synchronised, the same 300 test rows, p50. The
+package models are minimal checkpoints of the same architecture (latency does not
+depend on the weights), timed through `DecisionRuntime.decide`; the encoder runs in
+float32, the 4B in bfloat16.
+
+| Model | ChaosNLI (3 options) | GoEmotions (28 options) |
+| --- | --- | --- |
+| `bert-base-uncased`, marker readout | 7.8 ms | 8.5 ms |
+| `Qwen3-0.6B`, decoder backbone (one sequence per option) | 50 ms | 212 ms |
+| `Qwen3.5-4B` label readout, reference kernels | 147 ms | 168 ms |
+| `Qwen3.5-4B` label readout, `flash-linear-attention` | 115 ms | 125 ms |
+
+- The 4B pays one prefill per question, so its latency barely moves with the number
+  of options; the section 10 decoder pays one per option and is slower than the 4B
+  from GoEmotions' 28 options.
+- The encoder stays an order of magnitude ahead of both. Batched calls of several
+  questions were not measured for the 4B.
 
 ## What has not been measured
 
