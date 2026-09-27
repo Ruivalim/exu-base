@@ -940,33 +940,59 @@ the sample 2.8355 and 1.2853), ChaosNLI and BoolQ on the whole test split.
 - Every model is overconfident zero-shot: fitted temperatures 1.0 to 4.5 wherever
   the fit did not hit the bound.
 
-### LoRA fine-tune, one seed
+### LoRA fine-tune, three seeds
 
 `Qwen3.5-4B` frozen in bfloat16, a rank-16 LoRA (alpha 32, float32) on the attention
 and Gated DeltaNet projections (`q/k/v/o_proj`, `in_proj_qkv/z/a/b`, `out_proj`;
 14.4M trainable), the log score against the soft target over the label logits,
 `choice` options shuffled per example. 8,500 training rows per dataset (all 8,473 for
-BoolQ), one epoch, batch 16, lr `1e-4` with 5% warmup and linear decay, seed 17.
-About 1.5 rows per second and 8.7 GiB peak on an RTX 3060, 81 to 100 minutes per
-dataset. Whole test splits.
+BoolQ), the same rows for every seed, one epoch, batch 16, lr `1e-4` with 5% warmup
+and linear decay, seeds 17, 23 and 42: the seed changes the order, the shuffles and
+the adapter initialisation. About 1.4 to 1.8 rows per second and 8.4 to 8.8 GiB peak
+on an RTX 3060, 79 to 102 minutes of training per run. Whole test splits.
 
 | Dataset | LoRA 4B, 8,500 rows | Best trained model above | Its training rows |
 | --- | --- | --- | --- |
-| GoEmotions | 1.8474 | **1.8417 ± 0.0019** (decoder, section 10) | 46,370 |
-| ChaosNLI | **0.9305** | 0.9979 ± 0.0139 (decoder, section 10) | 16,000 |
-| BoolQ | **0.2139** (accuracy 0.916) | 0.3963 (decoder seed 17; 0.5214 and 0.6324 on the others) | 8,473 |
-| Measuring Hate Speech | **1.0232** (RPS 0.0439) | 1.0515 ± 0.0043 (`bert-base-uncased`, RPS 0.0486) | 55,656 |
+| GoEmotions | 1.8443 ± 0.0028 | **1.8417 ± 0.0019** (decoder, section 10) | 46,370 |
+| ChaosNLI | **0.9303 ± 0.0182** | 0.9979 ± 0.0139 (decoder, section 10) | 16,000 |
+| BoolQ | **0.2108 ± 0.0033** (accuracy 0.922) | 0.3963 (decoder seed 17; 0.5214 and 0.6324 on the others) | 8,473 |
+| Measuring Hate Speech | **1.0221 ± 0.0033** (RPS 0.0437) | 1.0515 ± 0.0043 (`bert-base-uncased`, RPS 0.0486) | 55,656 |
+
+Per seed (17, 23, 42): GoEmotions 1.8474, 1.8434, 1.8421; ChaosNLI 0.9305, 0.9484,
+0.9121; BoolQ 0.2139, 0.2111, 0.2074; Measuring Hate Speech 1.0232, 1.0183, 1.0247.
 
 - With the same or fewer training rows (the same on BoolQ, about half on ChaosNLI, a
-  sixth on Measuring Hate Speech), the adapter wins three of four and ties
-  GoEmotions, 0.006 behind a model trained on 5.5 times its data (and 0.018 ahead of
-  the section 10 decoder on 16,000 rows).
+  sixth on Measuring Hate Speech), the adapter wins three of four on every seed and
+  ties GoEmotions, 0.003 behind a model trained on 5.5 times its data.
+- The seed spread is small next to those gaps: 0.003 on three datasets, 0.018 on
+  ChaosNLI, whose worst seed (0.9484) is still ahead of the decoder's mean.
 - Shuffling the options in training removes most of the order effect: the top answer
-  survives reversal on 91% (GoEmotions) and 94% (ChaosNLI) of rows.
-- Fitted temperatures 0.99 to 1.22, except ChaosNLI at 3.3: trained on MultiNLI's
-  hard labels and tested on ChaosNLI's spread, as the encoders were in section 9.
-- One seed against three on most rows of the other side. Latency was not measured:
-  one 4B prefill per question against K prefills of 0.6B has no obvious winner.
+  survives reversal on 88% to 94% of GoEmotions rows and 94% to 96% of ChaosNLI rows.
+- Fitted temperatures 1.01 to 1.26, except ChaosNLI at 3.1 to 3.3: trained on
+  MultiNLI's hard labels and tested on ChaosNLI's spread, as the encoders were in
+  section 9.
+
+### LoRA fine-tune, the whole training split
+
+The same recipe, seed 17, with every training row of the two datasets where the other
+side had used many more: the comparison at equal data.
+
+| Dataset | LoRA 4B, 8,500 rows (3 seeds) | LoRA 4B, all rows (seed 17) | Best trained model above, same rows |
+| --- | --- | --- | --- |
+| GoEmotions (46,370 rows) | 1.8443 ± 0.0028 | **1.7904** (accuracy 0.574) | 1.8417 ± 0.0019 (decoder, section 10) |
+| Measuring Hate Speech (55,656 rows) | 1.0221 ± 0.0033 | **1.0004** (RPS 0.0400) | 1.0515 ± 0.0043 (`bert-base-uncased`, 3 epochs, RPS 0.0486) |
+
+- At equal data the GoEmotions tie becomes a gap of 0.051, about twenty times the
+  spread of either side's seeds. Measuring Hate Speech gains another 0.022, and the
+  adapter saw each row once where the encoder saw it three times.
+- One seed. The 8,500-row spread (0.003) says a second seed is unlikely to close
+  either gap, but it has not been run.
+- Cost: 7.9 hours (GoEmotions) and 8.7 hours (Measuring Hate Speech) of training on
+  one RTX 3060, 1.6 to 1.8 rows per second, 8.7 GiB peak. One GoEmotions row above
+  1,024 tokens was skipped. Temperatures 1.01 and 1.04; the top answer survives
+  reversal on 94% of GoEmotions rows.
+- Latency was not measured: one 4B prefill per question against K prefills of 0.6B
+  has no obvious winner. Neither was one adapter trained on all four datasets.
 
 ## What has not been measured
 
