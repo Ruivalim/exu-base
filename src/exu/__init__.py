@@ -22,6 +22,12 @@ Training is a CLI::
 """
 
 from .architecture import DecisionModel, build_model, builder_for, model_from_pretrained
+from .bandit import (
+    BanditConfig,
+    bandit_loss,
+    estimate_target,
+    simulated_bandit_loss,
+)
 from .calibration import (
     TemperatureFit,
     TemperatureMap,
@@ -68,6 +74,7 @@ from .types import DecisionQuestion, DecisionType, Option
 
 __all__ = [
     "ActionCosts",
+    "BanditConfig",
     "Checkpoint",
     "Decision",
     "DecisionBuilder",
@@ -94,10 +101,12 @@ __all__ = [
     "TemperatureMap",
     "TrainingBatch",
     "TrainingExample",
+    "bandit_loss",
     "build_model",
     "builder_for",
     "classification_metrics",
     "composite_score",
+    "estimate_target",
     "fit_temperature",
     "fit_reference_prior",
     "fit_temperature_map",
@@ -116,6 +125,7 @@ __all__ = [
     "save_checkpoint",
     "selective_coverage",
     "sigma_for",
+    "simulated_bandit_loss",
     "spherical_score",
     "uniform_baseline",
     "write_jsonl",

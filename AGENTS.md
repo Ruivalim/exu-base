@@ -46,6 +46,7 @@ src/exu/          the package, all of it (there is no second source tree)
   architecture.py  picks the model and the builder from a config (and so a checkpoint)
   scoring.py       log, spherical and ranked-probability scores; composite reward
   policy.py        perturbed-logit policy gradient, advantages, sigma schedule
+  bandit.py        proper score from feedback on one sampled answer (probe, no CLI yet)
   calibration.py   temperature fitting and the per-type/per-bucket map
   data.py          JSONL records, dataset, split and augmentation plumbing
   augmentation.py  option shuffling and friends

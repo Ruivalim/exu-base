@@ -1,6 +1,7 @@
 # Reward and policy-gradient math
 
-This is what the code in `exu/scoring.py` and `exu/policy.py` computes, and why.
+This is what the code in `exu/scoring.py`, `exu/policy.py` and `exu/bandit.py`
+computes, and why.
 
 Notation: `y` is the target distribution over `K` options (one value per option,
 summing to one), `q` is the model's distribution, `p` is a valid-option mask, and
@@ -162,3 +163,47 @@ The reward is differentiable in the logits, so sampling is optional. Its real
 contributions are the noise as a regularizer and the spherical and RPS terms. Honesty comes from the scoring rule being strictly proper, not from
 the sampling. Run the direct baseline, then the policy version, and keep the
 policy version only if it wins on held-out ECE or NLL.
+
+## Feedback on one sampled answer
+
+Everything above reads the whole target `y`. A sampled estimator has no direct
+alternative only when `y` is never seen: the model draws an answer `k`, and a judge,
+a test or a user says whether that one answer was right, `r` in `{0, 1}`. With
+`y_k` the chance that `k` is judged right, `exu/bandit.py` turns that feedback into
+an estimate of `y` and scores it with the same composite.
+
+The obvious policy gradient, REINFORCE on `r`, is not an option. Its expected reward
+is `sum_k q_k y_k`, linear in `q`, so it is maximized by all mass on the most likely
+answer: accuracy, not honesty. `tests/test_bandit.py` trains free logits on a
+`[0.6, 0.3, 0.1]` target both ways; REINFORCE ends at `0.99` on the first option,
+the estimator below at the target.
+
+Draw `k` from a behaviour policy that mixes the model with a uniform share,
+
+```
+pi = (1 - epsilon) * q.detach() + epsilon * uniform
+```
+
+and estimate the target from the one observation:
+
+```
+y_hat = r * e_k / pi_k                    # importance weighted
+y_hat = b + (r - b_k) * e_k / pi_k        # doubly robust, b = q.detach() by default
+```
+
+Both have `E[y_hat] = y` for any fixed `b`, as long as every valid option has
+`pi_k > 0`, which `epsilon > 0` guarantees and also bounds the weight by
+`K / epsilon`. The log and spherical scores are linear in `y`; the ranked
+probability score is linear in `y` up to a term the model cannot change. So the
+gradient of the composite loss against `y_hat` is, in expectation, the gradient
+against `y`, and the optimum is the same honest distribution. A test checks this
+exactly, enumerating every answer and verdict.
+
+`y_hat` is not a distribution: it exceeds one, and with a baseline it goes negative.
+It is scored by `bandit_loss`, which keeps every component, and never by
+`log_score`, which skips non-positive target mass and would drop half the estimate.
+
+Nothing in the data format carries a verdict on a sampled answer yet, so this runs
+only as a probe: `simulated_bandit_loss` draws the verdict from the target (one
+annotator, picked at random, agreeing or not) and reads the target nowhere else.
+
