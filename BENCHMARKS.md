@@ -1033,6 +1033,52 @@ float32, the 4B in bfloat16.
 - The encoder stays an order of magnitude ahead of both. Batched calls of several
   questions were not measured for the 4B.
 
+### One adapter, three datasets, the fourth held out, 2026-09-27
+
+The same recipe with the fast kernels, seed 17, one adapter trained on three datasets
+at once: the same 8,500 rows of each that the single-task adapters used (25,473 rows,
+25,500 without BoolQ), shuffled together, one epoch. Four adapters, each leaving one
+dataset out, all scored on the four whole test splits. 2.8 to 3.1 hours of training
+each on one RTX 3060, 2.2 to 2.6 rows per second, 8.5 GiB peak, no row skipped.
+
+Zero-shot `Qwen3.5-4B` was scored again on the whole GoEmotions and Measuring Hate
+Speech test splits for this comparison: 2.7808 and 1.2045 (`prior` 2.8267 and 1.2838
+on the whole splits).
+
+| Held out | GoEmotions | ChaosNLI | BoolQ | Measuring Hate Speech |
+| --- | --- | --- | --- | --- |
+| GoEmotions | *2.9337* | 0.9177 | 0.2028 | 1.0231 |
+| ChaosNLI | 1.8499 | *0.8804* | 0.2064 | 1.0210 |
+| BoolQ | 1.8534 | 0.9208 | *0.3407* | 1.0241 |
+| Measuring Hate Speech | 1.8480 | 0.9038 | 0.2019 | *1.2472* |
+| Single-task adapter, 3 seeds | 1.8443 ± 0.0028 | 0.9303 ± 0.0182 | 0.2108 ± 0.0033 | 1.0221 ± 0.0033 |
+| `Qwen3.5-4B` zero-shot | 2.7808 | 0.9524 | 0.4482 | 1.2045 |
+| `prior` | 2.8267 | 1.0982 | 0.6630 | 1.2838 |
+
+In italics, the dataset the adapter never saw.
+
+- On the datasets it trained on, one adapter does the work of three: Measuring Hate
+  Speech lands inside the single-task seed range, ChaosNLI inside it or below it
+  (0.9038 to 0.9208 against 0.9121 to 0.9484), BoolQ 0.004 to 0.009 better than the
+  single-task mean (all three below its best seed), GoEmotions 0.004 to 0.009 worse,
+  one to three times its seed spread.
+- Held out, the two tasks with one right answer transfer. BoolQ reaches 0.3407
+  (accuracy 0.860) against 0.4482 zero-shot, without ever seeing a `noul` question in
+  training. ChaosNLI reaches 0.8804 (accuracy 0.724), better than any adapter trained
+  on MultiNLI (0.9121 to 0.9484), with a fitted temperature of 1.57 against 3.1 to 3.3:
+  MultiNLI's hard labels were what made those adapters overconfident on ChaosNLI's
+  spread.
+- Held out, the two tasks whose target is one population's taste get worse than the
+  untouched base, and worse than `prior`: GoEmotions 2.9337, Measuring Hate Speech
+  1.2472 (accuracy 0.459 against 0.559 zero-shot). Training on the other tasks moves
+  the base away from these annotators, not towards them. Order robustness on
+  GoEmotions drops with it: the top answer survives reversal on 47% of rows, against
+  62% zero-shot and 90% to 92% for the adapters that saw GoEmotions.
+- One seed per arm. The held-out gaps to zero-shot (0.04 to 0.15) are far outside the 0.003 to
+  0.018 seed spread of the single-task runs; the in-task differences are not.
+- One adapter trained on all four datasets has still not been run; the in-task rows
+  above are the closest measurement.
+
 ## What has not been measured
 
 - RLCD with a reward per sampled answer and no target distribution (a judge, a
@@ -1048,8 +1094,9 @@ float32, the 4B in bfloat16.
   and the `marker` baseline matches the one-job-per-GPU number, but no run was
   repeated both ways.
 - The `noul` kind beyond BoolQ, and BoolQ beyond one question wording.
-- Held-out task families. Every dataset above is a single question, or a few
-  questions that all appear in training.
+- Held-out task families for the package's own models. Section 12 holds out whole
+  datasets for the 4B adapter, one seed; every other dataset above is a single
+  question, or a few questions that all appear in training.
 - The float16 path, which has no `GradScaler`, and any GPU older than Ampere.
 - Whether the temperature map absorbs the bias of section 8's smoothing.
 
