@@ -5,7 +5,7 @@ a published result of someone else, and nothing is tuned to look good: the proje
 is pre-alpha, the runs are small, and several of them say the toolkit's headline
 method loses to its own baseline.
 
-Last updated 2026-09-26.
+Last updated 2026-09-28.
 
 ## How to read this file
 
@@ -1078,6 +1078,44 @@ In italics, the dataset the adapter never saw.
   0.018 seed spread of the single-task runs; the in-task differences are not.
 - One adapter trained on all four datasets has still not been run; the in-task rows
   above are the closest measurement.
+
+### Smaller bases, 2026-09-28
+
+The single-task recipe with the fast kernels, unchanged, on `Qwen3.5-2B` (7.4M
+trainable) and `Qwen3.5-0.8B` (5.5M): the same 8,500 rows (8,473 for BoolQ), seed 17
+only, whole test splits. The 4B column is the three-seed mean from above.
+
+| Dataset | LoRA 0.8B | LoRA 2B | LoRA 4B, 3 seeds | 4B zero-shot | `prior` |
+| --- | --- | --- | --- | --- | --- |
+| GoEmotions | 1.9356 | 1.8787 | **1.8443 ± 0.0028** | 2.7808 | 2.8267 |
+| ChaosNLI | 1.0049 | 0.9659 | **0.9303 ± 0.0182** | 0.9524 | 1.0982 |
+| BoolQ | 0.3503 (accuracy 0.847) | 0.2698 (accuracy 0.891) | **0.2108 ± 0.0033** (accuracy 0.922) | 0.4482 | 0.6630 |
+| Measuring Hate Speech | 1.0608 | 1.0435 | **1.0221 ± 0.0033** | 1.2045 | 1.2838 |
+
+Zero-shot, the same bases score 1.0417 (0.8B) and 1.0140 (2B) on ChaosNLI and 0.6073
+and 0.5197 on BoolQ; their GoEmotions and Measuring Hate Speech numbers exist only on
+the 2,000-row sample of the first table, all above `prior`.
+
+- Every dataset orders by size, 4B ahead of 2B ahead of 0.8B. The 2B trails the 4B by
+  0.021 to 0.059, beyond the 4B seed spread on three datasets and twice it on
+  ChaosNLI. One seed for the smaller bases.
+- Against the package's own models the 2B still wins three of four: BoolQ 0.2698
+  against 0.3963 for the section 10 decoder, ChaosNLI 0.9659 against 0.9979, Measuring
+  Hate Speech 1.0435 against 1.0515 ± 0.0043 for `bert-base-uncased` on 6.5 times the
+  rows. GoEmotions loses by 0.037 to the decoder trained on 46,370 rows. The 0.8B wins
+  only BoolQ; ChaosNLI sits inside the decoder's spread.
+- On ChaosNLI neither smaller adapter beats the untrained 4B (0.9524). Temperatures
+  3.3 (2B) and 3.4 (0.8B), as the 4B's 3.1 to 3.3: before calibration both are worse
+  than `prior` (1.38 and 1.41), the same MultiNLI hard-label overconfidence. Every
+  other temperature is 0.99 to 1.24.
+- Shuffling fixes the position bias of the smaller bases: on ChaosNLI the top answer
+  survives reversal on 88% of rows for both, against 9% (2B) and 19% (0.8B)
+  zero-shot. GoEmotions 88% (2B) and 83% (0.8B).
+- Cost on one RTX 3060: 37 to 39 minutes per run for both sizes, 3.6 to 3.8 rows per
+  second, peak 3.9 GiB (2B) and 1.7 GiB (0.8B), against 56 to 64 minutes at 8.3 to
+  8.5 GiB for the 4B. The 0.8B trains no faster than the 2B, so at batch 1 something
+  other than the model's size bounds the rate; what, was not measured. Latency of the
+  smaller bases was not measured either.
 
 ## What has not been measured
 
