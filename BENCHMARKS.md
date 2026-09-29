@@ -5,7 +5,7 @@ a published result of someone else, and nothing is tuned to look good: the proje
 is pre-alpha, the runs are small, and several of them say the toolkit's headline
 method loses to its own baseline.
 
-Last updated 2026-09-28.
+Last updated 2026-09-29.
 
 ## How to read this file
 
@@ -35,6 +35,7 @@ Last updated 2026-09-28.
 | Training machine, section 12 | the same 2x RTX 3060 12 GB, one job per GPU, bfloat16 base |
 | Rented machines, section 11 | 1x NVIDIA A40 48 GB or RTX 3090 24 GB, RunPod secure cloud, one job at a time |
 | Probe machine | 1x NVIDIA RTX 4060 8 GB, shared with a desktop session |
+| Section 13 | GoEmotions on the 2x RTX 3060 12 GB, one job per GPU; Measuring Hate Speech on the RTX 4060, one job at a time (two did not fit in 8 GB) |
 | Precision | bfloat16 autocast, log term of the reward always in float32 |
 | Main encoder | `google-bert/bert-base-uncased` |
 | Other encoders tried | `answerdotai/ModernBERT-base` |
@@ -1117,11 +1118,119 @@ the 2,000-row sample of the first table, all above `prior`.
   other than the model's size bounds the rate; what, was not measured. Latency of the
   smaller bases was not measured either.
 
+## 13. Feedback on one sampled answer, simulated judge, 2026-09-28
+
+Every RLCD arm above scored its samples against the whole target, where the direct
+loss is the better estimator. This section tests the setting where a sampled
+estimator is needed: the model draws an answer, a judge says yes or no about that
+one answer, and the target is never read. The estimators are in `exu/bandit.py` and
+the math is in `docs/algorithm.md`. Nothing in the data format carries real
+verdicts yet, so the judge is simulated: it says yes to answer `k` with probability
+`y_k`, one annotator drawn at random agreeing or not. The runs are a probe outside
+the CLI: a driver swaps the loss of `--mode baseline` per arm, everything else is
+section 1's recipe (`bert-base-uncased`, 3 epochs, `--option-shuffle`, batch 8 with
+`--grad-accum 2`), calibrated, scored by `exu-evaluate`.
+
+Arms. `G` is the number of judged answers per question per pass, drawn from the
+model mixed with `0.1` of uniform (`-e1`: `1.0`, all uniform).
+
+- `baseline`: the whole target, the ceiling.
+- `sampled`: one annotator's label drawn from the target per row and pass, a full
+  categorical label instead of a verdict.
+- `verdict-gG`: binary log score of `q_k` against the verdict, on each sampled `k`.
+- `verdict-all`: every option judged once per pass, no sampling (28 verdicts).
+- `dr-g8`: doubly robust estimate of the target from the same verdicts, scored with
+  the composite.
+
+### GoEmotions, three seeds
+
+Bars on the test split: `uniform` 3.3322, `prior` 2.8267.
+
+| Arm | Test NLL | Brier | Accuracy | ECE | Temperature | Order stability | NLL vs `baseline`, paired |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `baseline` | **1.8627 ± 0.0138** | **0.2190 ± 0.0058** | **0.5502 ± 0.0058** | 0.1160 ± 0.0070 | 1.096 ± 0.036 | 0.967 ± 0.006 | |
+| `verdict-all` | 1.8935 ± 0.0070 | 0.2219 ± 0.0015 | 0.5457 ± 0.0063 | 0.1185 ± 0.0155 | 0.985 ± 0.078 | 0.950 ± 0.002 | +0.031 ± 0.021 (0/3) |
+| `sampled` | 1.9112 ± 0.0159 | 0.2259 ± 0.0032 | 0.5427 ± 0.0004 | 0.1150 ± 0.0074 | 1.071 ± 0.041 | 0.937 ± 0.002 | +0.048 ± 0.017 (0/3) |
+| `verdict-g28` | 1.9594 ± 0.0157 | 0.2260 ± 0.0050 | 0.5479 ± 0.0029 | 0.1069 ± 0.0126 | 1.103 ± 0.075 | 0.966 ± 0.006 | +0.097 ± 0.002 (0/3) |
+| `verdict-g8` | 1.9898 ± 0.0084 | 0.2282 ± 0.0021 | 0.5471 ± 0.0034 | 0.1094 ± 0.0114 | 1.020 ± 0.047 | 0.958 ± 0.003 | +0.127 ± 0.019 (0/3) |
+| `verdict-g8-e1` | 1.9938 ± 0.0144 | 0.2365 ± 0.0014 | 0.5218 ± 0.0117 | 0.0961 ± 0.0263 | 1.101 ± 0.056 | 0.947 ± 0.008 | +0.131 ± 0.028 (0/3) |
+| `verdict-g4` | 2.0610 ± 0.0201 | 0.2378 ± 0.0027 | 0.5292 ± 0.0106 | 0.1049 ± 0.0133 | 1.063 ± 0.067 | 0.946 ± 0.017 | +0.198 ± 0.019 (0/3) |
+| `dr-g8` | 2.1866 ± 0.0463 | 0.2562 ± 0.0061 | 0.5206 ± 0.0077 | 0.1190 ± 0.0383 | 1.674 ± 0.228 | 0.936 ± 0.011 | +0.324 ± 0.033 (0/3) |
+| `verdict-g1` | 2.9669 ± 0.3510 | 0.3881 ± 0.0672 | 0.2450 ± 0.1641 | 0.0372 ± 0.0129 | 1.030 ± 0.305 | 0.675 ± 0.534 | +1.104 ± 0.341 (0/3) |
+
+Per seed (17, 23, 42): `baseline` 1.8512, 1.8781, 1.8589; `verdict-all` 1.8987,
+1.8856, 1.8962; `sampled` 1.9189, 1.9217, 1.8929; `verdict-g8` 1.9864, 1.9837,
+1.9994; `verdict-g1` 2.9363, 3.3322, 2.6322.
+
+- The verdict loss learns from yes-or-no feedback alone. With 8 verdicts per
+  question per pass it lands 0.127 of NLL behind the whole target and 0.84 ahead of
+  `prior`; with every option judged, 0.031 behind, closer than one full annotator
+  label per pass (`sampled`, 0.048 behind). `verdict-all` against `sampled`, paired:
+  better on seeds 17 and 23, 0.003 worse on 42. It never beats the baseline.
+- Test NLL falls steadily with the number of verdicts: 2.97 (1), 2.06 (4), 1.99 (8),
+  1.96 (28 drawn with replacement), 1.89 (28, each option once). Drawing 28 with
+  replacement repeats some options and misses others, and costs 0.066.
+- One verdict per question per pass is not enough on 28 options: seed 23 stayed at
+  `uniform` exactly (3.3322), the other two ended at 2.94 and 2.63, near `prior`.
+- The doubly robust estimate, from the same 8 verdicts, trails the verdict loss by
+  0.197 and needs a temperature of 1.67 against 1.02. The likely cause is the
+  importance weights, which the verdict loss does not have; this was not isolated.
+- Full exploration (`-e1`) ties the default on NLL: +0.004 on average, better on
+  seeds 23 and 42 by 0.003 and 0.008, worse on 17 by 0.023. It loses on Brier and
+  accuracy in all three. Drawing from the model's own
+  distribution did not leave the rare emotions behind in a way the proper scores see.
+- The same probe run before the verdict loss existed, seed 17 on the RTX 4060: one
+  verdict per question with the doubly robust estimate ended at `uniform` (3.3322),
+  with plain importance weighting at 9.08 before calibration (collapsed on the
+  majority class). On free per-row logits with the same targets, removing gradient
+  clipping or switching Adam for SGD did not change that; information per row did.
+- Every arm beats `prior` except `verdict-g1`. Its ECE of 0.037, the lowest in the
+  table, is the ECE of a model near uniform, not a calibration result.
+
+### Measuring Hate Speech, one seed
+
+Seed 17, on the RTX 4060. Ordinal questions with 3 or 5 levels, so a verdict
+carries much more of the target than on GoEmotions. The verdict loss scores the
+binary event only, so the RPS term of the composite does not enter the bandit arms.
+Bars: `uniform` 1.4817, `prior` 1.2838.
+
+| Arm | Test NLL | Brier | RPS | Accuracy | ECE | Temperature | NLL vs `baseline` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `baseline` | **1.0495** | **0.1926** | **0.0483** | **0.6172** | 0.0835 | 1.75 | |
+| `verdict-g8` | 1.0647 | 0.1969 | 0.0500 | 0.6124 | 0.0800 | 1.58 | +0.015 |
+| `verdict-g4` | 1.0703 | 0.1995 | 0.0515 | 0.6118 | 0.0773 | 1.24 | +0.021 |
+| `verdict-g1` | 1.0883 | 0.2044 | 0.0540 | 0.6091 | 0.0796 | 1.47 | +0.039 |
+
+- On 3 to 5 options one verdict per question per pass already learns: 0.039 behind
+  the whole target and 0.196 ahead of `prior`. Eight verdicts close it to 0.015,
+  about three and a half times the 0.0043 seed spread of section 4's
+  `bert-base-uncased`. One seed, so read these as a direction.
+- The baseline reproduces section 4's number (1.0515 ± 0.0043).
+
+What this does and does not show. The judge is simulated from the annotators, so a
+verdict is exactly as noisy as one annotator; a real judge (a model, a test, a user)
+brings its own bias, and nothing here measures that. The comparison is at equal
+epochs, not at equal annotation cost: `verdict-all` asks 28 questions per row and
+pass where `sampled` asks one. What it does show is that a proper score on the
+sampled answer, with no importance weight, recovers most of what the full target
+teaches, and that its cost is the number of verdicts per question, not the
+optimiser.
+
+```bash
+# The driver, the run queue and the aggregator are working files outside the
+# repository. Each arm runs:
+uv run python bandit_probe.py verdict-g8 -- --encoder google-bert/bert-base-uncased \
+  --train $D --train-split train --validation $D --validation-split validation \
+  --calibration $D --calibration-split calibration --test $D --test-split test \
+  --calibrate --option-shuffle --epochs 3 --batch-size 8 --grad-accum 2 --seed 17 \
+  --output artifacts/bandit/exp/verdict-g8-s17
+```
+
 ## What has not been measured
 
-- RLCD with a reward per sampled answer and no target distribution (a judge, a
-  preference), the one setting where a policy gradient has no direct alternative.
-  Section 11's teacher still gave whole distributions.
+- Feedback on a sampled answer from a real judge. Section 13 simulates the judge
+  from the annotators; a model, a test or a user as judge, with its own bias, has
+  not been run, and neither has a comparison at equal annotation cost.
 - RLCD as a second stage after a shorter first stage, while the model still has
   room. Section 10's second stage started at the peak.
 - More epochs, another sigma schedule, another learning rate.
