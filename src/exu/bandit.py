@@ -26,7 +26,17 @@ the loss against ``y`` in expectation, and the same optimum: honest
 probabilities. ``b`` defaults to the model's own detached distribution, which
 makes ``y_hat`` exact wherever the model already is.
 
-Two conditions carry the unbiasedness, and both are enforced here:
+The third estimator skips the target estimate: :func:`verdict_loss` scores the
+sampled answer's own probability ``q_k`` against ``r`` with a binary log score.
+Every drawn ``k`` has its optimum at ``q_k = y_k``, whatever the drawing
+probability, so it needs no importance weight and has none to blow up. It is the
+same idea as rewarding a stated confidence in the sampled answer with a proper
+score (Damani et al., "Beyond Binary Rewards", arXiv:2507.16806), except that here
+the confidence is the model's own probability for that option. On free logits
+with the GoEmotions targets it learned the most per verdict of the three.
+
+Two conditions carry the unbiasedness of the estimates, and both are enforced
+here:
 
 - every valid option must have a positive probability under ``pi``, or its target
   mass is never observed. ``pi`` mixes the model with a uniform share
@@ -49,28 +59,30 @@ from torch import Tensor
 
 from .scoring import ranked_probability_score, spherical_score
 
-_CONTROLS = ("none", "model")
+ESTIMATORS = ("verdict", "doubly-robust", "importance")
 
 
 @dataclass(frozen=True, slots=True)
 class BanditConfig:
-    """How answers are drawn and how the feedback becomes a target estimate.
+    """How answers are drawn and what the feedback trains.
 
-    ``control="model"`` is the doubly robust estimator with the model's own
-    distribution as baseline; ``"none"`` is plain importance weighting.
+    ``verdict`` scores each sampled answer's own probability against its verdict
+    (:func:`verdict_loss`). ``doubly-robust`` and ``importance`` build a target
+    estimate (:func:`estimate_target`), with the model's distribution as baseline
+    or none, and score it with :func:`bandit_loss`.
     """
 
     samples_per_question: int = 1
     exploration: float = 0.1
-    control: str = "model"
+    estimator: str = "verdict"
 
     def __post_init__(self) -> None:
         if self.samples_per_question < 1:
             raise ValueError("samples_per_question must be at least one")
         if not 0 < self.exploration <= 1:
             raise ValueError("exploration must be in (0, 1]: an option never drawn is never seen")
-        if self.control not in _CONTROLS:
-            raise ValueError(f"control must be one of {_CONTROLS}")
+        if self.estimator not in ESTIMATORS:
+            raise ValueError(f"estimator must be one of {ESTIMATORS}")
 
 
 def behaviour_policy(probabilities: Tensor, option_mask: Tensor, exploration: float) -> Tensor:
@@ -160,6 +172,44 @@ def bandit_loss(
     return -score.mean()
 
 
+def verdict_loss(
+    log_probabilities: Tensor, answers: Tensor, rewards: Tensor, option_mask: Tensor
+) -> Tensor:
+    """Binary log score of each sampled answer's probability against its verdict.
+
+    For answer ``k`` judged ``r``, the score is ``r log q_k + (1 - r) log(1 - q_k)``.
+    Its expectation over ``r`` is maximized at ``q_k = y_k`` for every ``k`` that is
+    drawn, whatever the drawing probability, and ``y`` itself lies on the simplex,
+    so ``q = y`` maximizes every term at once. No importance weight is needed, and
+    so none can blow up; the drawing probabilities only decide which options the
+    model spends its capacity on when it cannot fit ``y`` exactly.
+
+    ``log(1 - q_k)`` is the log-sum-exp of the other options' log-probabilities,
+    exact where ``1 - exp(log q_k)`` would round to zero on a confident answer.
+    """
+    if answers.shape != rewards.shape or answers.dim() != 2:
+        raise ValueError("answers and rewards must share a (batch, samples) shape")
+    mask = option_mask.bool()
+    if not torch.all(mask.gather(-1, answers)):
+        raise ValueError("an answer points at a padded option")
+    chosen = log_probabilities.gather(-1, answers)
+    others = log_probabilities.unsqueeze(1).expand(*answers.shape, -1)
+    excluded = (
+        ~mask.unsqueeze(1)
+        | torch.nn.functional.one_hot(answers, log_probabilities.shape[-1]).bool()
+    )
+    # A question with one valid option has no rest: log(1 - q_k) is -inf there, and
+    # a log-sum-exp over nothing would put NaN in the gradient, so it is set apart.
+    has_rest = (~excluded).any(dim=-1)
+    filled = others.masked_fill(excluded, float("-inf"))
+    filled = torch.where(has_rest.unsqueeze(-1), filled, torch.zeros_like(filled))
+    rest = torch.where(has_rest, filled.logsumexp(dim=-1), torch.full_like(chosen, float("-inf")))
+    rewards = rewards.to(chosen.dtype)
+    # 0 * -inf is NaN, so a right verdict skips the rest instead of multiplying it.
+    wrong = torch.where(rewards < 1, (1 - rewards) * rest, torch.zeros_like(rest))
+    return -(rewards * chosen + wrong).mean()
+
+
 def simulated_bandit_loss(
     log_probabilities: Tensor,
     target: Tensor,
@@ -175,16 +225,19 @@ def simulated_bandit_loss(
 
     The only read of ``target`` is inside :func:`simulated_feedback`, one Bernoulli
     draw per sampled answer, so the model learns from what bandit feedback would
-    give it and nothing more.
+    give it and nothing more. The ``verdict`` estimator scores the binary event
+    only, so the spherical and ranked weights apply to the other two.
     """
     settings = config or BanditConfig()
     probabilities = log_probabilities.detach().exp()
     behaviour = behaviour_policy(probabilities, option_mask, settings.exploration)
     answers = sample_answers(behaviour, settings.samples_per_question, generator)
     rewards = simulated_feedback(target, answers, generator)
+    if settings.estimator == "verdict":
+        return verdict_loss(log_probabilities, answers, rewards, option_mask)
     baseline = probabilities.masked_fill(~option_mask.bool(), 0.0)
     estimate = estimate_target(
-        answers, rewards, behaviour, baseline if settings.control == "model" else None
+        answers, rewards, behaviour, baseline if settings.estimator == "doubly-robust" else None
     )
     return bandit_loss(
         log_probabilities,

@@ -27,6 +27,7 @@ from .bandit import (
     bandit_loss,
     estimate_target,
     simulated_bandit_loss,
+    verdict_loss,
 )
 from .calibration import (
     TemperatureFit,
@@ -128,6 +129,7 @@ __all__ = [
     "simulated_bandit_loss",
     "spherical_score",
     "uniform_baseline",
+    "verdict_loss",
     "write_jsonl",
 ]
 

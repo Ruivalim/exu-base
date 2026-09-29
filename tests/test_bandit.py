@@ -13,6 +13,7 @@ from exu.bandit import (
     sample_answers,
     simulated_bandit_loss,
     simulated_feedback,
+    verdict_loss,
 )
 from exu.model import masked_log_softmax
 from exu.scoring import log_score, proper_scoring_loss
@@ -50,9 +51,9 @@ def test_behaviour_policy_rejects_no_exploration() -> None:
         BanditConfig(exploration=0.0)
 
 
-def test_config_rejects_unknown_control_and_no_samples() -> None:
-    with pytest.raises(ValueError, match="control"):
-        BanditConfig(control="median")
+def test_config_rejects_unknown_estimator_and_no_samples() -> None:
+    with pytest.raises(ValueError, match="estimator"):
+        BanditConfig(estimator="median")
     with pytest.raises(ValueError, match="samples_per_question"):
         BanditConfig(samples_per_question=0)
 
@@ -175,10 +176,11 @@ def _train_free_logits(target: torch.Tensor, loss_of, steps: int = 4000) -> torc
     return masked_log_softmax(logits.detach(), mask).exp()
 
 
-def test_bandit_training_converges_to_the_honest_distribution() -> None:
+@pytest.mark.parametrize("estimator", ["verdict", "doubly-robust", "importance"])
+def test_bandit_training_converges_to_the_honest_distribution(estimator: str) -> None:
     target = torch.tensor([[0.6, 0.3, 0.1]]).expand(64, 3)
     generator = torch.Generator().manual_seed(9)
-    config = BanditConfig(exploration=0.1)
+    config = BanditConfig(exploration=0.1, estimator=estimator)
 
     learned = _train_free_logits(
         target,
@@ -205,3 +207,71 @@ def test_rewarding_the_sampled_answer_directly_is_not_honest() -> None:
     learned = _train_free_logits(target, reinforce)
 
     assert learned.mean(dim=0)[0] > 0.9
+
+
+def _expected_verdict_loss(logits, target, mask, behaviour):
+    def loss_for(k: int, r: float) -> torch.Tensor:
+        lp = masked_log_softmax(logits, mask)
+        return verdict_loss(lp, torch.tensor([[k]]), torch.tensor([[r]]), mask)
+
+    return _expected_over_feedback(behaviour, target, loss_for)
+
+
+def test_expected_verdict_loss_is_minimized_by_the_target() -> None:
+    target = torch.tensor([[0.5, 0.3, 0.2, 0.0]])
+    mask = torch.tensor([[True, True, True, False]])
+    # A behaviour far from the target: the optimum must not depend on it.
+    behaviour = torch.tensor([[0.1, 0.1, 0.8, 0.0]])
+    honest = torch.log(target.clamp_min(1e-30)).masked_fill(~mask, 0.0).requires_grad_(True)
+
+    at_target = _expected_verdict_loss(honest, target, mask, behaviour)
+    at_target.backward()
+
+    assert honest.grad.abs().max() < 1e-6
+    generator = torch.Generator().manual_seed(4)
+    for _ in range(20):
+        moved = honest.detach() + 0.3 * torch.randn(1, 4, generator=generator)
+        assert _expected_verdict_loss(moved, target, mask, behaviour) > at_target.detach()
+
+
+def test_verdict_loss_is_the_binary_log_score_of_the_answer() -> None:
+    log_probabilities = torch.log(torch.tensor([[0.5, 0.25, 0.25]]))
+    mask = torch.ones(1, 3, dtype=torch.bool)
+    answers = torch.tensor([[0, 1]])
+    rewards = torch.tensor([[1.0, 0.0]])
+
+    loss = verdict_loss(log_probabilities, answers, rewards, mask)
+
+    expected = -(torch.log(torch.tensor(0.5)) + torch.log(torch.tensor(0.75))) / 2
+    assert loss.item() == pytest.approx(expected.item())
+
+
+def test_verdict_loss_prices_a_confident_wrong_answer_exactly() -> None:
+    # 1 - q_k rounds to zero in float32 here; the log-sum-exp of the rest does not.
+    logits = torch.tensor([[40.0, 0.0, 0.0]], requires_grad=True)
+    mask = torch.ones(1, 3, dtype=torch.bool)
+    log_probabilities = masked_log_softmax(logits, mask)
+
+    loss = verdict_loss(log_probabilities, torch.tensor([[0]]), torch.tensor([[0.0]]), mask)
+    loss.backward()
+
+    assert loss.item() == pytest.approx(40.0 - torch.log(torch.tensor(2.0)).item(), rel=1e-4)
+    assert torch.all(torch.isfinite(logits.grad))
+
+
+def test_verdict_loss_on_a_single_option_question_has_no_nan() -> None:
+    logits = torch.tensor([[1.0, 0.0]], requires_grad=True)
+    mask = torch.tensor([[True, False]])
+    log_probabilities = masked_log_softmax(logits, mask)
+
+    loss = verdict_loss(log_probabilities, torch.tensor([[0]]), torch.tensor([[1.0]]), mask)
+    loss.backward()
+
+    assert loss.item() == pytest.approx(0.0, abs=1e-6)
+    assert torch.all(torch.isfinite(logits.grad))
+
+
+def test_verdict_loss_rejects_an_answer_on_a_padded_option() -> None:
+    mask = torch.tensor([[True, True, False]])
+    with pytest.raises(ValueError, match="padded"):
+        verdict_loss(torch.zeros(1, 3), torch.tensor([[2]]), torch.tensor([[1.0]]), mask)

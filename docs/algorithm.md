@@ -199,6 +199,28 @@ gradient of the composite loss against `y_hat` is, in expectation, the gradient
 against `y`, and the optimum is the same honest distribution. A test checks this
 exactly, enumerating every answer and verdict.
 
+A third option skips the estimate of `y`. `verdict_loss` scores the sampled
+answer's own probability against its verdict with a binary log score:
+
+```
+L = -[ r * log q_k + (1 - r) * log(1 - q_k) ]
+```
+
+For every drawn `k`, the expectation over `r` is maximized at `q_k = y_k`, whatever
+the probability of drawing `k`, and `y` lies on the simplex, so `q = y` maximizes
+every term at once. No importance weight enters, so none can blow up. It is the
+idea of RLCR (Damani et al., arXiv:2507.16806), a proper score on a stated
+confidence that the sampled answer is right, with the confidence read off the
+model's own distribution. `log(1 - q_k)` is taken as the log-sum-exp of the other
+options, exact where `1 - q_k` rounds to zero. It is the default estimator.
+
+On free per-row logits with the GoEmotions targets (2,048 rows, 30 passes, Adam
+and clipping as in `exu-train`), one verdict per row per pass leaves every
+estimator near uniform, and removing the clipping or switching to SGD barely
+changes that: the limit is information per row, not the optimizer. With eight
+verdicts per row per pass, `verdict` reached 1.75 against 1.95 for the doubly
+robust estimate (the full target 1.11, the entropy floor 0.97).
+
 `y_hat` is not a distribution: it exceeds one, and with a baseline it goes negative.
 It is scored by `bandit_loss`, which keeps every component, and never by
 `log_score`, which skips non-positive target mass and would drop half the estimate.
