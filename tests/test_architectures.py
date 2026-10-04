@@ -311,6 +311,12 @@ def test_the_decoder_leaves_the_uniform_guess_on_a_task_without_lexical_cue() ->
     memorising the table, so a held-out split would measure the wrong thing. What
     matters is leaving the symmetric saddle at all: on these rows the tiny encoder
     with the marker scorer stays at exactly log 2 on three seeds out of three.
+
+    The learning rate is low on purpose. At 3e-3 this tiny decoder leaves the
+    guess and falls back to log 2 on about half the seeds and thread counts, so the
+    test measured the optimizer's instability instead of the readout. At 3e-4 for
+    1500 steps it fitted all 72 runs tried (seeds 0 to 19, one to four threads)
+    with an nll at most 0.001; at 500 or 800 steps one run in 60 still missed.
     """
     torch.manual_seed(0)
     tokenizer = tiny_decoder_tokenizer()
@@ -320,9 +326,9 @@ def test_the_decoder_leaves_the_uniform_guess_on_a_task_without_lexical_cue() ->
     batch = builder.tensors([builder.build(state, question) for state, question, _ in rows])
     target = torch.tensor([row[2] for row in rows])
     ordinal = torch.zeros(len(rows), dtype=torch.bool)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-3)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 
-    for _step in range(300):
+    for _step in range(1500):
         output = model(**batch)
         log_probabilities = masked_log_softmax(output.logits, batch["option_mask"])
         loss = proper_scoring_loss(log_probabilities, target, batch["option_mask"], ordinal)
