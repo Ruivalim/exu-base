@@ -7,6 +7,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-04
+
+### Breaking
+
+- `TrainingBatch` holds the model's inputs as one `inputs` mapping, with
+  `option_mask` as a property, instead of one field per encoder tensor. Code that
+  built or read a batch by field breaks.
+- A pretrained backbone loads in float32 whatever dtype it was published in (see
+  Fixed). A run that relied on 0.1.0 keeping the published dtype now uses more
+  memory and gives different numbers.
+- Checkpoint format 2. Format 1 checkpoints still load here, but a checkpoint
+  saved by this version does not load in 0.1.0.
+
 ### Added
 
 - `--backbone decoder`, experimental: a causal backbone (default
@@ -20,6 +33,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `--grad-checkpointing` in `exu-train`, for either backbone.
 - `training.json` records the architecture and the backbone and head learning
   rates.
+- `exu.bandit`, a probe without a CLI mode: a proper score from a verdict on one
+  sampled answer, with no target read. `verdict_loss` (the default estimator,
+  binary log score of the sampled answer's probability against its verdict),
+  `estimate_target` (importance-weighted or doubly robust), `bandit_loss`,
+  `simulated_bandit_loss` and `BanditConfig`. Math in `docs/algorithm.md`, numbers
+  in `BENCHMARKS.md` section 13. No data format carries real verdicts yet.
 
 ### Changed
 
@@ -29,10 +48,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   saying which they look like.
 - `--encoder` and `--encoder-lr` default per backbone, and `--header-budget`
   defaults to `--max-length` when that is below 192 instead of raising.
-- `TrainingBatch` holds the model's inputs as one `inputs` mapping, with
-  `option_mask` as a property, instead of one field per encoder tensor.
-  `SequenceBuilder.tensors` builds that mapping; the runtime and the evaluation
-  passes no longer build tensors by hand.
+- `SequenceBuilder.tensors` builds the batch's `inputs` mapping; the runtime and
+  the evaluation passes no longer build tensors by hand.
 - The README recommends `--mode baseline` and its training example uses it.
   `--mode rlcd` stays, as the method under evaluation: it lost all fourteen
   comparisons in `BENCHMARKS.md`, teacher-model targets included (section 11).
@@ -152,5 +169,6 @@ Found by an external review before this first release, and fixed here:
 - The explainer site mirrors the fixed budget allocator, anneals sigma linearly
   like the library, and its dim text clears WCAG AA contrast.
 
-[Unreleased]: https://github.com/ruivalim/exu-base/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ruivalim/exu-base/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ruivalim/exu-base/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ruivalim/exu-base/releases/tag/v0.1.0
