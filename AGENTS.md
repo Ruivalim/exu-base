@@ -32,8 +32,9 @@ a new output layer.
 
 Prior art, and what came from where, is in the "Prior art" section of the README.
 The short version: the typed-decision contract comes from TypeSafe's Jev, the RLCD
-name comes from TypeSafe too, the open build recipe comes from Laya, and no source
-code was copied from anyone.
+name comes from TypeSafe too, the open build recipe comes from Laya, NanoJev
+published the decoder layout first (ours was reached independently, and the credit
+is NanoJev's), and no source code was copied from anyone.
 
 ## Layout
 

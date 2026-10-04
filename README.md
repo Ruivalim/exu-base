@@ -246,6 +246,19 @@ docs come from Laya's measurements, not from runs made here.
 This is an independent implementation. No source code was copied from either
 project.
 
+[NanoJev](https://github.com/TianyuCodings/NanoJev) (MIT) published the layout of
+the experimental decoder backbone first, on 2026-09-17: one sequence per option,
+the state and the question before a `Candidate:` and a `Decision:` line, and the
+last token's hidden state read through `LayerNorm` and `Linear(hidden, 1)`. The
+probe behind `--backbone decoder` was written four days later without knowing
+NanoJev existed, and we only found it afterwards. It got there first, so the credit
+for that layout is its. No code was copied from it either.
+
+Two more open reconstructions of Jev, found at the same time:
+[Kev](https://github.com/jaredpalmer/kev) (Apache-2.0, by Jared Palmer), which is
+wire-compatible with TypeSafe's API, and
+[jev-forge](https://github.com/zwliJay/jev-forge) (MIT).
+
 One more reference, in a different setting. Nandakishor M, *Confidence-Aware
 Routing for Large Language Model Reliability Enhancement* ([arXiv:2510.01237](https://arxiv.org/abs/2510.01237),
 2025) is by the same author as Laya. It estimates confidence before generation
