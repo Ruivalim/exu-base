@@ -5,7 +5,7 @@ a published result of someone else, and nothing is tuned to look good: the proje
 is pre-alpha, the runs are small, and several of them say the toolkit's headline
 method loses to its own baseline.
 
-Last updated 2026-09-29.
+Last updated 2026-10-08.
 
 ## How to read this file
 
@@ -36,6 +36,7 @@ Last updated 2026-09-29.
 | Rented machines, section 11 | 1x NVIDIA A40 48 GB or RTX 3090 24 GB, RunPod secure cloud, one job at a time |
 | Probe machine | 1x NVIDIA RTX 4060 8 GB, shared with a desktop session |
 | Section 13 | GoEmotions on the 2x RTX 3060 12 GB, one job per GPU; Measuring Hate Speech on the RTX 4060, one job at a time (two did not fit in 8 GB) |
+| Section 14 | Exu arms on the 2x RTX 3060 12 GB (one decoder seed on a rented RTX 3090); Unsloth 0.8B on the RTX 4060, 2B and 4B on rented RTX 3090s; Clef on a rented GPU; latency on the RTX 4060 |
 | Precision | bfloat16 autocast, log term of the reward always in float32 |
 | Main encoder | `google-bert/bert-base-uncased` |
 | Other encoders tried | `answerdotai/ModernBERT-base` |
@@ -1226,6 +1227,145 @@ uv run python bandit_probe.py verdict-g8 -- --encoder google-bert/bert-base-unca
   --output artifacts/bandit/exp/verdict-g8-s17
 ```
 
+## 14. Typed decisions against Unsloth and Clef, 2026-10-08
+
+Two other projects train the same kind of model: Unsloth's `FastDecisionModel`
+(Qwen3.5 plus LoRA and a joint head that answers every question about a state from
+one prefill) and Cloudflare's Clef (Qwen3.8-27B and Qwen3.5-9B with a joint schema
+head, published weights, no training here). This section puts Exu next to both on
+the benchmark Unsloth's guide uses, scored with the same proper scores.
+
+**Data.** `typed-decisions` (Apache-2.0): synthetic agent and workflow traces, 1,200
+training cases and 400 test cases, five questions per case (`choice`, `score` and
+`noul`, 3 to 5 options). The gold is soft, the mean of three teacher samples; the
+dataset card puts the teacher's agreement with itself at 0.735. The training cases
+were split by a hash of the case id into train (884 cases, 4,420 questions),
+validation (174) and calibration (142); the official 400 test cases (2,000
+questions) are the test split for every arm. A `family` is workflow plus question,
+so the temperature map and the per-question prior see the same cells.
+
+**Metrics.** Accuracy against `argmax(gold)`, `KL(gold || pred)`, Brier summed over
+options and NLL against the soft gold, all averaged over the 2,000 questions; these
+are the dataset card's own metrics plus NLL. `uniform` reproduces the card's numbers
+exactly (KL 0.444, Brier 0.238). `prior` is fitted on our train split, and our ECE is
+10-bin top-1 ECE; neither matches the card's values, so ECE is only compared inside
+this table.
+
+**Arms.**
+
+- Exu `--mode baseline`, soft cross-entropy, 5 epochs, `--option-shuffle`,
+  `--calibrate`, `--max-length 768`. The decoder is `Qwen/Qwen3-0.6B` (encoder lr
+  `1e-5`, batch 4 with `--grad-accum 4`, `--grad-checkpointing`) on a 3060, one seed
+  of it on a rented RTX 3090 after it ran out of memory on the 3060. The encoders
+  are `answerdotai/ModernBERT-base` and `-large` (batch 8, `--grad-accum 2`).
+- Unsloth 2026.10.2, its documented recipe unchanged (LoRA r 16, lr `2e-4`, batch 8
+  with accumulation 4, cosine schedule), only `--epochs` and the seed changed. Its
+  default is 2 epochs. Unsloth's `calibrate` fits a head temperature against the
+  hard labels and folds it into the weights; `raw` arms undo that fold and read the
+  logits at temperature 1.
+- Clef and Clef-flash zero-shot, through Cloudflare's reference
+  `joint_schema_model.py`, no training.
+- `+ Exu temperature map`: Exu's per-type, per-bucket map fitted against the soft
+  gold of the 142 calibration cases and applied to another model's raw logits. For
+  Clef that means it is no longer zero-shot: it has seen 710 labelled questions.
+
+| Arm | Seeds | Accuracy | KL | Brier | NLL | ECE |
+| --- | --- | --- | --- | --- | --- | --- |
+| Exu decoder Qwen3-0.6B | 3 | 0.779 ± 0.000 | 0.090 ± 0.003 | 0.050 ± 0.001 | 0.858 ± 0.003 | 0.155 ± 0.002 |
+| Exu ModernBERT-base `marker-cls` | 3 | 0.728 ± 0.005 | 0.139 ± 0.012 | 0.076 ± 0.006 | 0.907 ± 0.012 | 0.122 ± 0.006 |
+| Exu ModernBERT-base `marker` | 1 | 0.675 | 0.170 | 0.098 | 0.937 | 0.088 |
+| Exu ModernBERT-large `marker-cls` | 1 | 0.542 | 0.281 | 0.161 | 1.048 | 0.050 |
+| Unsloth Qwen3.5-0.8B, 2 epochs, raw | 3 | 0.685 ± 0.016 | 0.166 ± 0.013 | 0.097 ± 0.008 | 0.934 ± 0.013 | 0.123 ± 0.009 |
+| Unsloth Qwen3.5-0.8B, 2 epochs, hard-calibrated | 3 | 0.684 ± 0.017 | 0.329 ± 0.017 | 0.143 ± 0.008 | 1.096 ± 0.017 | 0.037 ± 0.008 |
+| Unsloth Qwen3.5-2B, 2 epochs, raw | 2 | 0.752 ± 0.016 | 0.106 ± 0.002 | 0.059 ± 0.002 | 0.873 ± 0.002 | 0.151 ± 0.011 |
+| Unsloth Qwen3.5-2B, 2 epochs, hard-calibrated | 2 | 0.752 ± 0.016 | 0.271 ± 0.022 | 0.102 ± 0.006 | 1.038 ± 0.022 | 0.019 ± 0.008 |
+| Unsloth Qwen3.5-4B, 2 epochs, raw | 2 | 0.776 ± 0.004 | 0.090 ± 0.001 | 0.050 ± 0.002 | 0.858 ± 0.001 | 0.153 ± 0.001 |
+| Unsloth Qwen3.5-4B, 2 epochs, hard-calibrated | 2 | 0.777 ± 0.005 | 0.325 ± 0.029 | 0.108 ± 0.009 | 1.092 ± 0.029 | 0.016 ± 0.001 |
+| Unsloth Qwen3.5-0.8B, 5 epochs, raw | 3 | 0.777 ± 0.006 | 0.094 ± 0.003 | 0.051 ± 0.002 | 0.861 ± 0.003 | 0.148 ± 0.004 |
+| Unsloth Qwen3.5-0.8B, 5 epochs, + Exu temperature map | 3 | 0.777 ± 0.006 | 0.093 ± 0.003 | 0.051 ± 0.001 | 0.860 ± 0.003 | 0.151 ± 0.005 |
+| Unsloth Qwen3.5-0.8B, 5 epochs, hard-calibrated | 3 | 0.778 ± 0.006 | 0.311 ± 0.009 | 0.107 ± 0.002 | 1.078 ± 0.009 | 0.021 ± 0.003 |
+| Unsloth Qwen3.5-2B, 5 epochs, raw | 1 | 0.792 | 0.081 | 0.045 | 0.848 | 0.153 |
+| Unsloth Qwen3.5-2B, 5 epochs, + Exu temperature map | 1 | 0.792 | 0.080 | 0.044 | 0.847 | 0.163 |
+| Unsloth Qwen3.5-4B, 5 epochs, raw | 1 | **0.807** | 0.073 | 0.040 | 0.840 | 0.163 |
+| Unsloth Qwen3.5-4B, 5 epochs, + Exu temperature map | 1 | **0.807** | **0.071** | **0.039** | **0.838** | 0.175 |
+| Unsloth Qwen3.5-4B, 5 epochs, hard-calibrated | 1 | 0.806 | 0.390 | 0.112 | 1.157 | 0.016 |
+| Clef 27B, zero-shot | 1 | 0.718 | 0.191 | 0.103 | 0.958 | 0.023 |
+| Clef 27B + Exu temperature map | 1 | 0.718 | 0.144 | 0.078 | 0.912 | 0.104 |
+| Clef-flash 9B, zero-shot | 1 | 0.698 | 0.209 | 0.111 | 0.977 | 0.012 |
+| Clef-flash 9B + Exu temperature map | 1 | 0.698 | 0.160 | 0.084 | 0.928 | 0.103 |
+| `uniform` | | 0.277 | 0.444 | 0.238 | 1.212 | 0.045 |
+| `prior` | | 0.481 | 0.327 | 0.181 | 1.095 | 0.036 |
+
+Seeds: Exu 17, 23, 42; Unsloth 3407 (its default), 17, 23. "1" means seed 17 for
+Exu and 3407 for Unsloth.
+
+- **Exu does not win this benchmark.** At matched epochs the Exu decoder on
+  Qwen3-0.6B (KL 0.090) ties Unsloth on Qwen3.5-0.8B (0.094 ± 0.003), and the
+  Unsloth 4B at 5 epochs is ahead at 0.073 on one seed. An earlier read of these
+  runs, with Unsloth at its 2-epoch default, made Exu look 0.08 of KL better; that
+  was the epoch count. On this data 2 epochs undertrain the 0.8B (accuracy 0.685
+  against 0.777 at 5).
+- **Hard-label calibration multiplies KL by two to five.** Unsloth's `calibrate`
+  targets the chance that the top answer is right, as its docs say, and gets the
+  lowest ECE among the trained arms (0.016 to 0.037). Read as a distribution against
+  the soft gold, every hard-calibrated arm lands near `prior` on KL and NLL (KL 0.271
+  to 0.390 against 0.327), ahead of it only on Brier. The same raw logits, scored at
+  temperature 1, are the best numbers in the table. Which one is right depends on
+  whether the probabilities are used as probabilities or as a ranking with a
+  confidence cutoff.
+- **The soft-gold temperature map rescues the zero-shot models and does almost
+  nothing for trained ones.** On Clef it cuts KL by 25% (27B, 0.191 to 0.144) and
+  23% (flash, 0.209 to 0.160) with no change in accuracy. On Unsloth arms trained
+  on the same soft targets it moves KL by 0.001 to 0.002, inside the seed spread.
+  It raises ECE everywhere, for the reason in "How to read this file".
+- **The trained models beat the 27B zero-shot model on every proper score.** That
+  is specialist against generalist on a synthetic benchmark whose gold comes from a
+  teacher model; it says nothing about Clef on other data.
+- **ModernBERT.** The base encoder with `marker-cls` is the cheapest arm that
+  clears `prior` well (KL 0.139, about Unsloth 0.8B at 2 epochs); plain `marker` is
+  worse, as in section 5. ModernBERT-large stayed close to `prior` at the default
+  learning rate; that run was not investigated and is not a result about the model.
+- Every trained arm and every Clef arm beats `uniform` and `prior` on KL, Brier and
+  NLL, except the hard-calibrated Unsloth arms (above) and ModernBERT-large, which
+  beats `prior` but stays close to it.
+
+**Cost.** Training time for 5 epochs, one seed: Exu decoder about 3 hours on an RTX
+3060 (one sequence per option, no prefix shared across options); Unsloth 0.8B 29
+minutes on the RTX 4060; Unsloth 2B 21 minutes and 4B 44 minutes on an RTX 3090;
+Exu ModernBERT-base about 15 minutes on a 3060. Different cards, so this is an order
+of magnitude, not a ratio.
+
+**Latency**, RTX 4060, one case of five questions per call, p50 and p95 over 100
+test cases after 5 warm-up cases, model already loaded:
+
+| Model | p50 ms | p95 ms |
+| --- | --- | --- |
+| Exu ModernBERT-base `marker-cls`, `exu-decide --batch-size 5` | 43 | 48 |
+| Unsloth Qwen3.5-0.8B, `FastDecisionModel.predict`, one prefill | 73 | 83 |
+| Exu decoder Qwen3-0.6B, `exu-decide --batch-size 5` | 369 | 405 |
+
+Unsloth ran without `torch.compile` (it failed with a stride assertion on this
+card) and without the `causal_conv1d` kernel, so 73 ms is an upper bound for it.
+The Exu decoder builds one sequence per option, about 18 sequences per case here,
+and re-reads the state in each; that, not the base size, is the 5x.
+
+What this does not show. It is one synthetic dataset with teacher-model gold; the
+2B and 4B arms at 5 epochs have one seed each; the decoder and Unsloth use
+different Qwen generations (3 and 3.5), so the tie at small size is between
+recipes and bases together. Unsloth's recipe was not tuned beyond the epoch count,
+and neither was Exu's.
+
+```bash
+# The converter, the scorer, the Unsloth and Clef drivers and the aggregator are
+# working files outside the repository. The Exu decoder arm runs:
+uv run exu-train --mode baseline --backbone decoder --encoder Qwen/Qwen3-0.6B \
+  --scorer marker --grad-checkpointing \
+  --train $D --train-split train --validation $D --validation-split validation \
+  --calibration $D --calibration-split calibration --calibrate \
+  --test $D --test-split test --option-shuffle --epochs 5 --batch-size 4 \
+  --grad-accum 4 --max-length 768 --seed 17 --output artifacts/td/qwen06-dec-s17
+```
+
 ## What has not been measured
 
 - Feedback on a sampled answer from a real judge. Section 13 simulates the judge
@@ -1246,6 +1386,11 @@ uv run python bandit_probe.py verdict-g8 -- --encoder google-bert/bert-base-unca
   question, or a few questions that all appear in training.
 - The float16 path, which has no `GradScaler`, and any GPU older than Ampere.
 - Whether the temperature map absorbs the bias of section 8's smoothing.
+- Section 14 beyond one synthetic dataset: the 2B and 4B Unsloth arms at 5 epochs
+  with more than one seed, an Exu decoder on a Qwen3.5 base or at 2B and 4B, and
+  any tuning of either recipe beyond the epoch count.
+- A hard-label temperature in Exu, for callers who threshold on the top answer's
+  confidence; section 14 shows what it costs on soft targets in Unsloth.
 
 ## Reproducing
 
