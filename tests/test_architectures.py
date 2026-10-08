@@ -16,6 +16,7 @@ import torch
 from helpers import (
     SMOKE,
     smoke_examples,
+    tiny_composite_decoder,
     tiny_decoder,
     tiny_decoder_model,
     tiny_decoder_tokenizer,
@@ -264,6 +265,34 @@ def test_exu_train_writes_the_architecture_it_trained(tmp_path, mode) -> None:
     loaded = load_checkpoint(output)
     assert type(loaded.model).__name__ == "DecoderDecisionModel"
     assert loaded.sequence_config.header_budget == 96
+
+
+def test_a_decoder_whose_text_sizes_live_in_text_config_trains_and_reloads(tmp_path) -> None:
+    # Qwen3.5 checkpoints are vision-language models: `hidden_size` is only on
+    # `config.text_config`, and the top-level config has none.
+    backbone_dir = tmp_path / "tiny-composite"
+    tokenizer = tiny_decoder_tokenizer()
+    tokenizer.save_pretrained(backbone_dir)
+    backbone = tiny_composite_decoder(len(tokenizer))
+    assert not hasattr(backbone.config, "hidden_size")
+    backbone.save_pretrained(backbone_dir)
+    output = tmp_path / "out"
+
+    code = train_cli.main(
+        ["--train", str(SMOKE), "--train-split", "train",
+         "--validation", str(SMOKE), "--validation-split", "validation",
+         "--output", str(output), "--backbone", "decoder", "--encoder", str(backbone_dir),
+         "--epochs", "1", "--batch-size", "4", "--device", "cpu", "--max-length", "96"]
+    )  # fmt: skip
+
+    assert code == 0
+    loaded = load_checkpoint(output)
+    assert type(loaded.model.backbone.config).__name__ == "Qwen3_5Config"
+    assert loaded.model.score.in_features == 32
+    state, question = _pairs()[1]
+    decision = DecisionRuntime.load(output, device="cpu").decide(state, question)
+    assert len(decision.probabilities) == len(question.options)
+    assert sum(decision.probabilities) == pytest.approx(1.0, abs=1e-5)
 
 
 @pytest.mark.parametrize("name", ["encoder", "decoder"])

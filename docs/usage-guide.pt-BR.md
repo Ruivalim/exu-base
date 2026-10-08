@@ -129,6 +129,9 @@ uv run exu-train \
 - Memória: o modelo de 0.6B foi treinado em placas de 12 GB com
   `--grad-checkpointing` e `--batch-size 4 --grad-accum 4`. 8 GB não foi testado;
   pesos, gradientes e estado do AdamW somam uns 9,6 GB só na conta.
+- Uma base de visão e linguagem como `Qwen/Qwen3.5-0.8B` funciona: a cabeça lê os
+  tamanhos do `text_config` dela, e a torre de visão é carregada mas nunca usada.
+  O 0.8B dela não coube numa placa de 12 GB, estourou a memória no estado do AdamW.
 - `--header-budget` é o espaço para tudo menos o estado numa sequência. Uma
   pergunta cuja opção mais longa não cabe levanta erro em vez de ser cortada.
 - As opções nunca se enxergam, então a resposta não pode depender da ordem:

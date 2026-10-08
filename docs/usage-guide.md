@@ -126,6 +126,9 @@ uv run exu-train \
 - Memory: the 0.6B model was trained on 12 GB cards with `--grad-checkpointing`
   and `--batch-size 4 --grad-accum 4`. 8 GB was not tried; weights, gradients and
   AdamW state alone come to about 9.6 GB by arithmetic.
+- A vision-language base such as `Qwen/Qwen3.5-0.8B` works: the head reads the
+  sizes from its `text_config`, and the vision tower is loaded but never fed. Its
+  0.8B did not fit on a 12 GB card, which ran out of memory at the AdamW state.
 - `--header-budget` is the room for everything but the state in one sequence. A
   question whose longest option does not fit raises instead of being cut.
 - Options never see each other, so the answer cannot depend on their order:

@@ -185,7 +185,8 @@ class DecoderDecisionModel(nn.Module):
             raise ValueError("DecoderDecisionModel needs a config with backbone='decoder'")
         self.config = config
         self.backbone = backbone
-        hidden_size = backbone.config.hidden_size
+        # A vision-language base (Qwen3.5) keeps its text sizes in `text_config`.
+        hidden_size = backbone.config.get_text_config().hidden_size
         self.norm = nn.LayerNorm(hidden_size)
         self.score = nn.Linear(hidden_size, 1)
         nn.init.normal_(self.score.weight, std=0.02)
