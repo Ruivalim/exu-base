@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
@@ -28,6 +29,7 @@ from pathlib import Path
 
 import torch
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
@@ -48,6 +50,7 @@ _DEFAULT_POLICY = PolicyConfig()
 # the encoder default is the one the encoder runs used.
 _DEFAULT_BACKBONE = {"encoder": DEFAULT_ENCODER, "decoder": DEFAULT_DECODER}
 _DEFAULT_BACKBONE_LR = {"encoder": 2.5e-5, "decoder": 1e-5}
+LR_SCHEDULES = ("constant", "cosine")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -98,6 +101,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--head-lr", type=_positive_float, default=1e-4)
     parser.add_argument("--weight-decay", type=_non_negative_float, default=0.01)
+    parser.add_argument(
+        "--lr-schedule",
+        choices=LR_SCHEDULES,
+        default="constant",
+        help="constant keeps both learning rates fixed; cosine decays them to zero by the "
+        "last update",
+    )
+    parser.add_argument(
+        "--warmup-steps",
+        type=_non_negative_int,
+        default=0,
+        help="updates over which both learning rates ramp up linearly from zero",
+    )
     parser.add_argument("--max-grad-norm", type=_positive_float, default=1.0)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     parser.add_argument("--max-length", type=_positive_int, default=512)
@@ -229,6 +245,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     steps_per_epoch = max(1, (len(train_loader) + args.grad_accum - 1) // args.grad_accum)
     total_steps = steps_per_epoch * args.epochs
+    if args.warmup_steps >= total_steps:
+        parser.error(
+            f"--warmup-steps {args.warmup_steps} leaves no update after warm-up: "
+            f"this run makes {total_steps}"
+        )
+    scheduler = LambdaLR(
+        optimizer,
+        lambda update: lr_multiplier(update, total_steps, args.warmup_steps, args.lr_schedule),
+    )
     step = 0
     history: list[EpochStats] = []
     for epoch in range(1, args.epochs + 1):
@@ -236,6 +261,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             model,
             train_loader,
             optimizer,
+            scheduler,
             device,
             policy,
             args,
@@ -313,6 +339,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "encoder": args.encoder,
         "encoder_lr": args.encoder_lr,
         "head_lr": args.head_lr,
+        "lr_schedule": args.lr_schedule,
+        "warmup_steps": args.warmup_steps,
         "grad_checkpointing": args.grad_checkpointing,
         "scorer": args.scorer,
         "epochs": args.epochs,
@@ -338,6 +366,7 @@ def _train_epoch(
     model: DecisionModel,
     loader: DataLoader[TrainingBatch],
     optimizer: AdamW,
+    scheduler: LambdaLR,
     device: torch.device,
     policy: PolicyConfig | None,
     args: argparse.Namespace,
@@ -404,13 +433,13 @@ def _train_epoch(
         losses.append(float(loss.detach().item()))
         pending += 1
         if pending >= args.grad_accum:
-            _optimizer_step(model, optimizer, args.max_grad_norm)
+            _optimizer_step(model, optimizer, scheduler, args.max_grad_norm)
             pending = 0
             step += 1
         if args.log_every and (index + 1) % args.log_every == 0:
             print(f"  step {step} loss={losses[-1]:.4f}")
     if pending:
-        _optimizer_step(model, optimizer, args.max_grad_norm)
+        _optimizer_step(model, optimizer, scheduler, args.max_grad_norm)
         step += 1
 
     stats = EpochStats(
@@ -429,10 +458,31 @@ def _train_epoch(
     return stats, step
 
 
-def _optimizer_step(model: DecisionModel, optimizer: AdamW, max_grad_norm: float) -> None:
+def _optimizer_step(
+    model: DecisionModel, optimizer: AdamW, scheduler: LambdaLR, max_grad_norm: float
+) -> None:
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
     optimizer.step()
+    scheduler.step()
     optimizer.zero_grad(set_to_none=True)
+
+
+def lr_multiplier(update: int, total_steps: int, warmup_steps: int, schedule: str) -> float:
+    """The factor on both learning rates for the update with this 0-based index.
+
+    Warm-up ramps linearly and reaches the full rate at update ``warmup_steps``, so
+    the first update is already a small step rather than a wasted one at zero. Cosine
+    then decays over the remaining updates and would reach zero at ``total_steps``,
+    one past the last update, so the last update still moves the weights.
+    """
+    if schedule not in LR_SCHEDULES:
+        raise ValueError(f"unknown lr schedule {schedule!r}, expected one of {LR_SCHEDULES}")
+    if update < warmup_steps:
+        return (update + 1) / (warmup_steps + 1)
+    if schedule == "constant":
+        return 1.0
+    progress = (update - warmup_steps) / max(total_steps - warmup_steps, 1)
+    return 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
 
 
 def _loader(

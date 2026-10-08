@@ -5,8 +5,9 @@ import json
 import pytest
 from helpers import FIXTURES, SMOKE, tiny_encoder, tiny_tokenizer
 
+import exu.train as train_module
 from exu.checkpoint import load_checkpoint, load_tokenizer
-from exu.train import _group_scale, build_parser, main, resolve_defaults
+from exu.train import _group_scale, build_parser, lr_multiplier, main, resolve_defaults
 
 
 def _encoder_dir(tmp_path):
@@ -255,3 +256,85 @@ def test_the_default_scorer_is_the_marker_one(tmp_path) -> None:
         build_parser().parse_args(
             ["--train", "a", "--validation", "b", "--output", "c", "--scorer", "x"]
         )
+
+
+def test_the_default_schedule_leaves_the_learning_rate_alone() -> None:
+    assert build_parser().get_default("lr_schedule") == "constant"
+    assert build_parser().get_default("warmup_steps") == 0
+    assert all(lr_multiplier(update, 10, 0, "constant") == 1.0 for update in range(10))
+
+
+def test_warmup_ramps_to_the_full_rate_without_a_zero_step() -> None:
+    ramp = [lr_multiplier(update, 20, 4, "constant") for update in range(6)]
+
+    assert ramp == pytest.approx([0.2, 0.4, 0.6, 0.8, 1.0, 1.0])
+
+
+def test_cosine_decays_monotonically_and_the_last_update_still_moves() -> None:
+    factors = [lr_multiplier(update, 12, 2, "cosine") for update in range(12)]
+
+    after_warmup = factors[2:]
+    assert after_warmup[0] == 1.0
+    assert all(
+        later <= earlier for earlier, later in zip(after_warmup, after_warmup[1:], strict=False)
+    )
+    assert 0.0 < after_warmup[-1] < 0.05
+    # Half way through the decay is half the rate.
+    assert lr_multiplier(7, 12, 2, "cosine") == pytest.approx(0.5)
+
+
+def test_cosine_with_a_single_update_runs_it_at_the_full_rate() -> None:
+    assert lr_multiplier(0, 1, 0, "cosine") == 1.0
+
+
+def test_an_unknown_schedule_is_refused() -> None:
+    with pytest.raises(ValueError, match="unknown lr schedule"):
+        lr_multiplier(0, 10, 0, "linear")
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(
+            ["--train", "t", "--validation", "v", "--output", "o", "--lr-schedule", "linear"]
+        )
+
+
+def test_warmup_that_covers_every_update_is_a_usage_error(tmp_path) -> None:
+    encoder = _encoder_dir(tmp_path)
+    output = tmp_path / "warm"
+    # 12 training rows, batch 4: three updates per epoch, three in all.
+    with pytest.raises(SystemExit):
+        main(
+            _common(tmp_path, encoder, output)
+            + ["--mode", "baseline", "--epochs", "1", "--warmup-steps", "3"]
+        )
+    assert not output.exists()
+
+
+def test_the_schedule_sets_the_rate_of_every_update_in_both_groups(tmp_path, monkeypatch) -> None:
+    encoder = _encoder_dir(tmp_path)
+    output = tmp_path / "cosine"
+    seen: list[tuple[float, float]] = []
+    real_step = train_module._optimizer_step
+
+    def recording_step(model, optimizer, scheduler, max_grad_norm):
+        seen.append(tuple(group["lr"] for group in optimizer.param_groups))
+        real_step(model, optimizer, scheduler, max_grad_norm)
+
+    monkeypatch.setattr(train_module, "_optimizer_step", recording_step)
+    code = main(
+        _common(tmp_path, encoder, output)
+        + ["--mode", "baseline", "--epochs", "2", "--grad-accum", "2",
+           "--encoder-lr", "1e-4", "--head-lr", "1e-3",
+           "--lr-schedule", "cosine", "--warmup-steps", "1"]
+    )  # fmt: skip
+
+    assert code == 0
+    # Three micro-batches per epoch at --grad-accum 2: two updates per epoch, the
+    # second one a trailing group of one.
+    total = 4
+    assert len(seen) == total
+    for update, (encoder_lr, head_lr) in enumerate(seen):
+        factor = lr_multiplier(update, total, 1, "cosine")
+        assert encoder_lr == pytest.approx(1e-4 * factor)
+        assert head_lr == pytest.approx(1e-3 * factor)
+    summary = json.loads((output / "training.json").read_text(encoding="utf-8"))
+    assert summary["lr_schedule"] == "cosine"
+    assert summary["warmup_steps"] == 1

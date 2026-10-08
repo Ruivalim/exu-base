@@ -179,6 +179,11 @@ Botões úteis, com os defaults: `--epochs 4`, `--batch-size 8`, `--grad-accum 1
 `--calibration-min-samples 64`, `--log-every 0`. O `--grad-checkpointing` vem
 desligado.
 
+As duas taxas de aprendizado são constantes, a não ser com `--lr-schedule cosine`,
+que as reduz até perto de zero ao longo do run. `--warmup-steps N` (default 0) as
+sobe linearmente nas N primeiras atualizações, com qualquer schedule; um warm-up do
+tamanho do run inteiro é recusado.
+
 ## 4. Treine a política
 
 Mesmo pipeline, `--mode rlcd` no lugar de `baseline`, e os botões da política
