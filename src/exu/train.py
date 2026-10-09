@@ -50,6 +50,9 @@ _DEFAULT_POLICY = PolicyConfig()
 # the encoder default is the one the encoder runs used.
 _DEFAULT_BACKBONE = {"encoder": DEFAULT_ENCODER, "decoder": DEFAULT_DECODER}
 _DEFAULT_BACKBONE_LR = {"encoder": 2.5e-5, "decoder": 1e-5}
+# The decoder gained from a decaying rate on typed-decisions and the encoder did not
+# (BENCHMARKS.md, section 14).
+_DEFAULT_SCHEDULE = {"encoder": ("constant", 0), "decoder": ("cosine", 10)}
 LR_SCHEDULES = ("constant", "cosine")
 
 
@@ -104,15 +107,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--lr-schedule",
         choices=LR_SCHEDULES,
-        default="constant",
         help="constant keeps both learning rates fixed; cosine decays them to zero by the "
-        "last update",
+        "last update (default: constant, or cosine with --backbone decoder)",
     )
     parser.add_argument(
         "--warmup-steps",
         type=_non_negative_int,
-        default=0,
-        help="updates over which both learning rates ramp up linearly from zero",
+        help="updates over which both learning rates ramp up linearly from zero "
+        "(default: 0, or 10 with --backbone decoder, shortened to fit a shorter run)",
     )
     parser.add_argument("--max-grad-norm", type=_positive_float, default=1.0)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
@@ -166,6 +168,12 @@ def resolve_defaults(args: argparse.Namespace) -> argparse.Namespace:
     """Fill the flags whose default depends on the backbone or on another flag."""
     args.encoder = args.encoder or _DEFAULT_BACKBONE[args.backbone]
     args.encoder_lr = args.encoder_lr or _DEFAULT_BACKBONE_LR[args.backbone]
+    schedule, warmup = _DEFAULT_SCHEDULE[args.backbone]
+    args.lr_schedule = args.lr_schedule or schedule
+    # A default warm-up may be shortened to fit the run; an explicit one may not.
+    args.default_warmup = args.warmup_steps is None
+    if args.default_warmup:
+        args.warmup_steps = warmup
     args.header_budget = args.header_budget or min(192, args.max_length)
     return args
 
@@ -245,6 +253,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     steps_per_epoch = max(1, (len(train_loader) + args.grad_accum - 1) // args.grad_accum)
     total_steps = steps_per_epoch * args.epochs
+    if args.default_warmup:
+        args.warmup_steps = min(args.warmup_steps, total_steps - 1)
     if args.warmup_steps >= total_steps:
         parser.error(
             f"--warmup-steps {args.warmup_steps} leaves no update after warm-up: "

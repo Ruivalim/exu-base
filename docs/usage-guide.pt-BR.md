@@ -179,12 +179,15 @@ Botões úteis, com os defaults: `--epochs 4`, `--batch-size 8`, `--grad-accum 1
 `--calibration-min-samples 64`, `--log-every 0`. O `--grad-checkpointing` vem
 desligado.
 
-As duas taxas de aprendizado são constantes, a não ser com `--lr-schedule cosine`,
-que as reduz até perto de zero ao longo do run. `--warmup-steps N` (default 0) as
-sobe linearmente nas N primeiras atualizações, com qualquer schedule; um warm-up do
-tamanho do run inteiro é recusado. No backbone decoder, use o schedule cosine: no
-`typed-decisions` ele levou o decoder em Qwen3.5-0.8B de KL 0.102 para 0.085 (seção
-14 do `BENCHMARKS.md`). No ModernBERT-base não fez diferença além da variação entre seeds.
+`--lr-schedule cosine` reduz as duas taxas de aprendizado até perto de zero ao longo
+do run; `constant` as mantém fixas. `--warmup-steps N` as sobe linearmente nas N
+primeiras atualizações, com qualquer schedule, e um warm-up do tamanho do run
+inteiro é recusado. Os defaults seguem o backbone. O encoder fica em `constant`, sem
+warm-up: no ModernBERT-base o cosine não fez diferença além da variação entre seeds.
+O decoder usa `cosine` com 10 atualizações de warm-up, encurtadas quando o run tem
+menos: no `typed-decisions` isso levou o decoder em Qwen3.5-0.8B de KL 0.102 para
+0.085 (seção 14 do `BENCHMARKS.md`). `--lr-schedule constant --warmup-steps 0` devolve
+ao decoder a taxa constante de antes.
 
 ## 4. Treine a política
 

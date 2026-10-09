@@ -54,19 +54,26 @@ def test_backbone_defaults_follow_the_backbone() -> None:
 
     assert encoder.encoder == "google-bert/bert-base-multilingual-cased"
     assert encoder.encoder_lr == 2.5e-5
+    assert (encoder.lr_schedule, encoder.warmup_steps) == ("constant", 0)
     assert decoder.encoder == "Qwen/Qwen3-0.6B"
     assert decoder.encoder_lr == 1e-5
+    # Section 14 of BENCHMARKS.md: the decoder wants the decaying schedule, the
+    # encoder showed no gain from it.
+    assert (decoder.lr_schedule, decoder.warmup_steps) == ("cosine", 10)
 
 
 def test_explicit_flags_win_over_backbone_defaults() -> None:
     args = build_parser().parse_args(
         ["--train", "t", "--validation", "v", "--output", "o", "--backbone", "decoder",
-         "--encoder", "some/model", "--encoder-lr", "3e-6", "--header-budget", "64"]
+         "--encoder", "some/model", "--encoder-lr", "3e-6", "--header-budget", "64",
+         "--lr-schedule", "constant", "--warmup-steps", "0"]
     )  # fmt: skip
 
     resolve_defaults(args)
 
     assert (args.encoder, args.encoder_lr, args.header_budget) == ("some/model", 3e-6, 64)
+    # An explicit zero is a choice, not a missing value.
+    assert (args.lr_schedule, args.warmup_steps) == ("constant", 0)
 
 
 def test_header_budget_never_exceeds_a_short_max_length() -> None:
@@ -258,9 +265,7 @@ def test_the_default_scorer_is_the_marker_one(tmp_path) -> None:
         )
 
 
-def test_the_default_schedule_leaves_the_learning_rate_alone() -> None:
-    assert build_parser().get_default("lr_schedule") == "constant"
-    assert build_parser().get_default("warmup_steps") == 0
+def test_the_constant_schedule_leaves_the_learning_rate_alone() -> None:
     assert all(lr_multiplier(update, 10, 0, "constant") == 1.0 for update in range(10))
 
 

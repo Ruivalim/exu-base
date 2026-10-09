@@ -243,6 +243,27 @@ def _backbone_dir(name: str, tmp_path):
     return directory
 
 
+def test_a_decoder_run_shorter_than_the_default_warmup_shortens_it(tmp_path) -> None:
+    output = tmp_path / "short"
+    # Batch 4, one epoch: fewer updates than the decoder's default ten warm-up steps.
+    updates = -(-len(smoke_examples("train")) // 4)
+    assert updates <= 10
+
+    code = train_cli.main(
+        ["--train", str(SMOKE), "--train-split", "train",
+         "--validation", str(SMOKE), "--validation-split", "validation",
+         "--output", str(output), "--backbone", "decoder",
+         "--encoder", str(_backbone_dir("decoder", tmp_path)),
+         "--epochs", "1", "--batch-size", "4", "--device", "cpu", "--max-length", "96"]
+    )  # fmt: skip
+
+    assert code == 0
+    summary = json.loads((output / "training.json").read_text(encoding="utf-8"))
+    assert summary["lr_schedule"] == "cosine"
+    # One update is left at the full rate, as an explicit warm-up would require.
+    assert summary["warmup_steps"] == updates - 1
+
+
 @pytest.mark.parametrize("mode", ["baseline", "rlcd"])
 def test_exu_train_writes_the_architecture_it_trained(tmp_path, mode) -> None:
     output = tmp_path / "out"

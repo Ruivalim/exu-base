@@ -176,12 +176,15 @@ Useful knobs, with their defaults: `--epochs 4`, `--batch-size 8`,
 `--max-length`, if smaller), `--calibration-min-samples 64`, `--log-every 0`.
 `--grad-checkpointing` is off by default.
 
-Both learning rates are constant unless `--lr-schedule cosine` is given, which
-decays them towards zero over the run. `--warmup-steps N` (default 0) ramps them up
-linearly over the first N updates, with either schedule; a warm-up as long as the
-whole run is refused. For the decoder backbone, use the cosine schedule: on
-`typed-decisions` it took the Qwen3.5-0.8B decoder from KL 0.102 to 0.085 (section 14
-of `BENCHMARKS.md`). On ModernBERT-base it made no difference inside the seed spread.
+`--lr-schedule cosine` decays both learning rates towards zero over the run;
+`constant` keeps them fixed. `--warmup-steps N` ramps them up linearly over the
+first N updates, with either schedule, and a warm-up as long as the whole run is
+refused. The defaults follow the backbone. The encoder stays `constant` with no
+warm-up: on ModernBERT-base the cosine made no difference inside the seed spread.
+The decoder uses `cosine` with 10 warm-up updates, shortened when the run has fewer:
+on `typed-decisions` it took the Qwen3.5-0.8B decoder from KL 0.102 to 0.085
+(section 14 of `BENCHMARKS.md`). `--lr-schedule constant --warmup-steps 0` gives a
+decoder the constant rate it had before.
 
 ## 4. Train the policy
 

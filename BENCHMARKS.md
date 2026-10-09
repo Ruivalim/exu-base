@@ -1260,7 +1260,8 @@ this table.
   on `Qwen/Qwen3.5-0.8B`, Unsloth's smallest base, ran on rented GPUs (it does not
   fit on 12 GB). Both decoders ran again with `--lr-schedule cosine
   --warmup-steps 10`, the schedule and warm-up of Unsloth's recipe, at encoder lr
-  `1e-5` and at `5e-5`; the default arms keep the lr constant. The encoders are
+  `1e-5` and at `5e-5`; the other arms kept the lr constant, then the only
+  schedule (now `--lr-schedule constant --warmup-steps 0` for a decoder). The encoders are
   `answerdotai/ModernBERT-base` (encoder lr `2.5e-5`, batch 8, `--grad-accum 2`) and `-large` (batch 4, `--grad-accum 4`, at
   `2.5e-5` and at `1e-5`).
 - Unsloth 2026.10.2, its documented recipe unchanged (LoRA r 16, lr `2e-4`, batch 8
@@ -1398,7 +1399,8 @@ uv run exu-train --mode baseline --backbone decoder --encoder Qwen/Qwen3-0.6B \
   --calibration $D --calibration-split calibration --calibrate \
   --test $D --test-split test --option-shuffle --epochs 5 --batch-size 4 \
   --grad-accum 4 --max-length 768 --seed 17 --output artifacts/td/qwen06-dec-s17
-# The cosine arms add: --lr-schedule cosine --warmup-steps 10
+# The cosine arms are the decoder's default now; the constant arms add
+# --lr-schedule constant --warmup-steps 0
 ```
 
 ## What has not been measured

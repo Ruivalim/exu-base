@@ -7,6 +7,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Breaking
+
+- The decoder backbone trains with a cosine learning-rate schedule and 10 warm-up
+  updates by default, shortened when a run has fewer. A decoder run that relied on
+  the old constant rate needs `--lr-schedule constant --warmup-steps 0`. The encoder
+  default is unchanged.
+
+### Added
+
+- `exu-train --lr-schedule {constant,cosine}` and `--warmup-steps N`.
+
+### Fixed
+
+- The decoder backbone loads vision-language bases such as Qwen3.5, whose text sizes
+  live in `text_config`.
+
 ## [0.2.0] - 2026-10-04
 
 ### Breaking
