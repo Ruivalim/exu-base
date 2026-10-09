@@ -1278,6 +1278,7 @@ this table.
 | --- | --- | --- | --- | --- | --- | --- |
 | Exu decoder Qwen3-0.6B | 3 | 0.779 ± 0.000 | 0.090 ± 0.003 | 0.050 ± 0.001 | 0.858 ± 0.003 | 0.155 ± 0.002 |
 | Exu ModernBERT-base `marker-cls` | 3 | 0.728 ± 0.005 | 0.139 ± 0.012 | 0.076 ± 0.006 | 0.907 ± 0.012 | 0.122 ± 0.006 |
+| Exu ModernBERT-base `marker-cls`, cosine | 3 | 0.721 ± 0.027 | 0.149 ± 0.025 | 0.082 ± 0.015 | 0.916 ± 0.025 | 0.122 ± 0.013 |
 | Exu ModernBERT-base `marker` | 1 | 0.675 | 0.170 | 0.098 | 0.937 | 0.088 |
 | Exu decoder Qwen3-0.6B, cosine, lr `1e-5` | 3 | 0.797 ± 0.003 | 0.083 ± 0.003 | 0.045 ± 0.002 | 0.850 ± 0.003 | 0.168 ± 0.002 |
 | Exu decoder Qwen3-0.6B, cosine, lr `5e-5` | 1 | 0.715 | 0.153 | 0.084 | 0.920 | 0.128 |
@@ -1323,7 +1324,9 @@ Exu and 3407 for Unsloth.
   higher lr, closer to Unsloth's, hurts on both bases (0.153 and 0.187, one seed
   each): a full fine-tune does not want a LoRA learning rate. LoRA itself and
   Unsloth's one prefill per case were not tried in Exu, so this says the schedule
-  closes the gap, not that nothing else would.
+  closes the gap, not that nothing else would. It is a decoder result: on
+  ModernBERT-base `marker-cls` the same schedule gives 0.149 ± 0.025 against
+  0.139 ± 0.012, no gain inside the seed spread.
 - **Without the schedule, Exu ties at best.** At matched epochs and constant lr the
   Exu decoder on Qwen3-0.6B (KL 0.090) ties Unsloth on Qwen3.5-0.8B (0.094 ±
   0.003). An earlier read of these runs, with Unsloth at its 2-epoch default, made
@@ -1380,8 +1383,8 @@ The Exu decoder builds one sequence per option, about 18 sequences per case here
 and re-reads the state in each; that, not the base size, is the 5x.
 
 What this does not show. It is one synthetic dataset with teacher-model gold; the
-higher-lr arms have one seed; the Exu decoder was not run at 2B or 4B, and the
-encoders were not run with the cosine schedule. Unsloth's recipe was not tuned
+higher-lr arms have one seed; the Exu decoder was not run at 2B or 4B, and of
+the encoders only ModernBERT-base ran with the cosine schedule. Unsloth's recipe was not tuned
 beyond the epoch count; Exu's was tuned in its schedule and in two learning rates,
 which is more tuning than Unsloth got, and the choice was read off these test
 numbers, with no held-out selection.
@@ -1417,8 +1420,8 @@ uv run exu-train --mode baseline --backbone decoder --encoder Qwen/Qwen3-0.6B \
   question, or a few questions that all appear in training.
 - The float16 path, which has no `GradScaler`, and any GPU older than Ampere.
 - Whether the temperature map absorbs the bias of section 8's smoothing.
-- Section 14 beyond one synthetic dataset: the Exu decoder at 2B and 4B, the
-  encoders with the cosine schedule, LoRA in Exu, and any tuning of Unsloth beyond
+- Section 14 beyond one synthetic dataset: the Exu decoder at 2B and 4B,
+  ModernBERT-large with the cosine schedule, LoRA in Exu, and any tuning of Unsloth beyond
   the epoch count.
 - A hard-label temperature in Exu, for callers who threshold on the top answer's
   confidence; section 14 shows what it costs on soft targets in Unsloth.
