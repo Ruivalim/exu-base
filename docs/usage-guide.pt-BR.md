@@ -182,7 +182,9 @@ desligado.
 As duas taxas de aprendizado são constantes, a não ser com `--lr-schedule cosine`,
 que as reduz até perto de zero ao longo do run. `--warmup-steps N` (default 0) as
 sobe linearmente nas N primeiras atualizações, com qualquer schedule; um warm-up do
-tamanho do run inteiro é recusado.
+tamanho do run inteiro é recusado. No backbone decoder, use o schedule cosine: no
+`typed-decisions` ele levou o decoder em Qwen3.5-0.8B de KL 0.102 para 0.085 (seção
+14 do `BENCHMARKS.md`). O caminho encoder ainda não foi medido com ele.
 
 ## 4. Treine a política
 

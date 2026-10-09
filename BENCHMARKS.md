@@ -5,7 +5,7 @@ a published result of someone else, and nothing is tuned to look good: the proje
 is pre-alpha, the runs are small, and several of them say the toolkit's headline
 method loses to its own baseline.
 
-Last updated 2026-10-08.
+Last updated 2026-10-09.
 
 ## How to read this file
 
@@ -36,7 +36,7 @@ Last updated 2026-10-08.
 | Rented machines, section 11 | 1x NVIDIA A40 48 GB or RTX 3090 24 GB, RunPod secure cloud, one job at a time |
 | Probe machine | 1x NVIDIA RTX 4060 8 GB, shared with a desktop session |
 | Section 13 | GoEmotions on the 2x RTX 3060 12 GB, one job per GPU; Measuring Hate Speech on the RTX 4060, one job at a time (two did not fit in 8 GB) |
-| Section 14 | Exu arms on the 2x RTX 3060 12 GB (one decoder seed on a rented RTX 3090); Exu decoder on Qwen3.5-0.8B on a rented RTX PRO 4500; Unsloth 0.8B on the RTX 4060, 2B and 4B on a rented RTX 3090 (seed 3407) and RTX 4090 (seeds 17, 23); Clef on a rented GPU; latency on the RTX 4060 |
+| Section 14 | Exu arms on the 2x RTX 3060 12 GB (one decoder seed on a rented RTX 3090); Exu decoder on Qwen3.5-0.8B on rented RTX PRO 4500, A40, RTX A6000 and RTX 4090 pods, one run per pod; Unsloth 0.8B on the RTX 4060, 2B and 4B on a rented RTX 3090 (seed 3407) and RTX 4090 (seeds 17, 23); Clef on a rented GPU; latency on the RTX 4060 |
 | Precision | bfloat16 autocast, log term of the reward always in float32 |
 | Main encoder | `google-bert/bert-base-uncased` |
 | Other encoders tried | `answerdotai/ModernBERT-base` |
@@ -1257,9 +1257,11 @@ this table.
   `--calibrate`, `--max-length 768`. The decoder is `Qwen/Qwen3-0.6B` (encoder lr
   `1e-5`, batch 4 with `--grad-accum 4`, `--grad-checkpointing`) on a 3060, one seed
   of it on a rented RTX 3090 after it ran out of memory on the 3060. The same flags
-  on `Qwen/Qwen3.5-0.8B`, Unsloth's smallest base, ran on a rented RTX PRO 4500 (it
-  does not fit on 12 GB). The encoders are `answerdotai/ModernBERT-base` (encoder lr
-  `2.5e-5`, batch 8, `--grad-accum 2`) and `-large` (batch 4, `--grad-accum 4`, at
+  on `Qwen/Qwen3.5-0.8B`, Unsloth's smallest base, ran on rented GPUs (it does not
+  fit on 12 GB). Both decoders ran again with `--lr-schedule cosine
+  --warmup-steps 10`, the schedule and warm-up of Unsloth's recipe, at encoder lr
+  `1e-5` and at `5e-5`; the default arms keep the lr constant. The encoders are
+  `answerdotai/ModernBERT-base` (encoder lr `2.5e-5`, batch 8, `--grad-accum 2`) and `-large` (batch 4, `--grad-accum 4`, at
   `2.5e-5` and at `1e-5`).
 - Unsloth 2026.10.2, its documented recipe unchanged (LoRA r 16, lr `2e-4`, batch 8
   with accumulation 4, cosine schedule), only `--epochs` and the seed changed. Its
@@ -1277,7 +1279,11 @@ this table.
 | Exu decoder Qwen3-0.6B | 3 | 0.779 ± 0.000 | 0.090 ± 0.003 | 0.050 ± 0.001 | 0.858 ± 0.003 | 0.155 ± 0.002 |
 | Exu ModernBERT-base `marker-cls` | 3 | 0.728 ± 0.005 | 0.139 ± 0.012 | 0.076 ± 0.006 | 0.907 ± 0.012 | 0.122 ± 0.006 |
 | Exu ModernBERT-base `marker` | 1 | 0.675 | 0.170 | 0.098 | 0.937 | 0.088 |
-| Exu decoder Qwen3.5-0.8B | 1 | 0.769 | 0.103 | 0.059 | 0.871 | 0.144 |
+| Exu decoder Qwen3-0.6B, cosine, lr `1e-5` | 3 | 0.797 ± 0.003 | 0.083 ± 0.003 | 0.045 ± 0.002 | 0.850 ± 0.003 | 0.168 ± 0.002 |
+| Exu decoder Qwen3-0.6B, cosine, lr `5e-5` | 1 | 0.715 | 0.153 | 0.084 | 0.920 | 0.128 |
+| Exu decoder Qwen3.5-0.8B | 3 | 0.771 ± 0.003 | 0.102 ± 0.004 | 0.056 ± 0.003 | 0.869 ± 0.004 | 0.147 ± 0.003 |
+| Exu decoder Qwen3.5-0.8B, cosine, lr `1e-5` | 3 | 0.794 ± 0.001 | 0.085 ± 0.001 | 0.047 ± 0.001 | 0.852 ± 0.001 | 0.164 ± 0.003 |
+| Exu decoder Qwen3.5-0.8B, cosine, lr `5e-5` | 1 | 0.652 | 0.187 | 0.109 | 0.954 | 0.091 |
 | Exu ModernBERT-large `marker-cls`, lr `1e-5` | 3 | 0.723 ± 0.021 | 0.132 ± 0.017 | 0.072 ± 0.010 | 0.899 ± 0.017 | 0.116 ± 0.021 |
 | Exu ModernBERT-large `marker-cls`, lr `2.5e-5` | 1 | 0.542 | 0.281 | 0.161 | 1.048 | 0.050 |
 | Unsloth Qwen3.5-0.8B, 2 epochs, raw | 3 | 0.685 ± 0.016 | 0.166 ± 0.013 | 0.097 ± 0.008 | 0.934 ± 0.013 | 0.123 ± 0.009 |
@@ -1304,20 +1310,25 @@ this table.
 Seeds: Exu 17, 23, 42; Unsloth 3407 (its default), 17, 23. "1" means seed 17 for
 Exu and 3407 for Unsloth.
 
-- **Exu does not win this benchmark.** At matched epochs the Exu decoder on
-  Qwen3-0.6B (KL 0.090) ties Unsloth on Qwen3.5-0.8B (0.094 ± 0.003), and Unsloth
-  pulls ahead with size: 0.082 ± 0.002 at 2B, 0.073 ± 0.001 at 4B. An earlier read of these
-  runs, with Unsloth at its 2-epoch default, made Exu look 0.08 of KL better; that
-  was the epoch count. On this data 2 epochs undertrain the 0.8B (accuracy 0.685
-  against 0.777 at 5).
-- **On the same base, Unsloth's recipe is ahead.** The Exu decoder on Qwen3.5-0.8B,
-  the base Unsloth's 0.8B arm uses, lands at KL 0.103 on one seed, against Unsloth's
-  0.094 ± 0.003 on three, and behind Exu's own Qwen3-0.6B (0.090). The Qwen3-0.6B tie
-  above is then the older base doing better under Exu's recipe, not the recipe
-  matching Unsloth's. One seed: read it as a direction. The two recipes differ in
-  more than one place (full fine-tune at `1e-5` against LoRA at `2e-4` with a cosine
-  schedule; one sequence per option against one prefill per case), and nothing here
-  says which difference matters.
+- **On the same base and epochs, the Exu decoder with a cosine schedule is ahead
+  of Unsloth.** On Qwen3.5-0.8B, 5 epochs, it reaches KL 0.085 ± 0.001 against
+  Unsloth's 0.094 ± 0.003, with accuracy 0.794 against 0.777; NLL and Brier agree.
+  That is about where Unsloth's 2B lands (0.082 ± 0.002); Unsloth's 4B stays ahead
+  of everything here (0.073 ± 0.001). The Exu arm's top-1 ECE is higher (0.164
+  against 0.148), which "How to read this file" explains for soft targets.
+- **The schedule was the difference, not the learning rate.** With the lr held
+  constant, the default, the same Exu decoder on Qwen3.5-0.8B lands at 0.102 ±
+  0.004, behind Unsloth; the cosine decay with 10 warm-up steps takes it to 0.085.
+  On Qwen3-0.6B the same change moves 0.090 ± 0.003 to 0.083 ± 0.003. A five times
+  higher lr, closer to Unsloth's, hurts on both bases (0.153 and 0.187, one seed
+  each): a full fine-tune does not want a LoRA learning rate. LoRA itself and
+  Unsloth's one prefill per case were not tried in Exu, so this says the schedule
+  closes the gap, not that nothing else would.
+- **Without the schedule, Exu ties at best.** At matched epochs and constant lr the
+  Exu decoder on Qwen3-0.6B (KL 0.090) ties Unsloth on Qwen3.5-0.8B (0.094 ±
+  0.003). An earlier read of these runs, with Unsloth at its 2-epoch default, made
+  Exu look 0.08 of KL better; that was the epoch count. On this data 2 epochs
+  undertrain the 0.8B (accuracy 0.685 against 0.777 at 5).
 - **Hard-label calibration multiplies KL by two to six.** Unsloth's `calibrate`
   targets the chance that the top answer is right, as its docs say, and gets the
   lowest ECE among the trained arms (0.016 to 0.037). Read as a distribution against
@@ -1349,7 +1360,8 @@ Exu and 3407 for Unsloth.
 3060 (one sequence per option, no prefix shared across options); Unsloth 0.8B 29
 minutes on the RTX 4060; Unsloth 2B 21 minutes and 4B 44 minutes on an RTX 3090;
 Exu ModernBERT-base about 15 minutes and ModernBERT-large about 40 on a 3060; the Exu
-decoder on Qwen3.5-0.8B under two hours on an RTX PRO 4500, without the
+decoder on Qwen3.5-0.8B about two hours on an A40, RTX A6000, RTX 4090 or RTX PRO
+4500, without the
 `causal_conv1d` and `flash-linear-attention` kernels. Different cards, so this is an order
 of magnitude, not a ratio.
 
@@ -1368,9 +1380,11 @@ The Exu decoder builds one sequence per option, about 18 sequences per case here
 and re-reads the state in each; that, not the base size, is the 5x.
 
 What this does not show. It is one synthetic dataset with teacher-model gold; the
-Exu decoder on Qwen3.5-0.8B has one seed; the Exu decoder was not run at 2B or 4B.
-Unsloth's recipe was not tuned beyond the epoch count, and Exu's only in the
-encoder learning rate of ModernBERT-large.
+higher-lr arms have one seed; the Exu decoder was not run at 2B or 4B, and the
+encoders were not run with the cosine schedule. Unsloth's recipe was not tuned
+beyond the epoch count; Exu's was tuned in its schedule and in two learning rates,
+which is more tuning than Unsloth got, and the choice was read off these test
+numbers, with no held-out selection.
 
 ```bash
 # The converter, the scorer, the Unsloth and Clef drivers and the aggregator are
@@ -1381,6 +1395,7 @@ uv run exu-train --mode baseline --backbone decoder --encoder Qwen/Qwen3-0.6B \
   --calibration $D --calibration-split calibration --calibrate \
   --test $D --test-split test --option-shuffle --epochs 5 --batch-size 4 \
   --grad-accum 4 --max-length 768 --seed 17 --output artifacts/td/qwen06-dec-s17
+# The cosine arms add: --lr-schedule cosine --warmup-steps 10
 ```
 
 ## What has not been measured
@@ -1391,9 +1406,8 @@ uv run exu-train --mode baseline --backbone decoder --encoder Qwen/Qwen3-0.6B \
 - RLCD as a second stage after a shorter first stage, while the model still has
   room. Section 10's second stage started at the peak.
 - More epochs, another sigma schedule, another learning rate.
-- A decoder backbone beyond section 10: more than one epoch with a decaying
-  learning rate, a shorter first stage before RLCD, a prefix shared across the K
-  sequences, LoRA, and a remedy for its plateau on balanced two-option questions.
+- A decoder backbone beyond sections 10 and 14: a shorter first stage before RLCD,
+  a prefix shared across the K sequences, LoRA, and a remedy for its plateau on balanced two-option questions.
 - Whether four jobs sharing one GPU change a result. Runs are seeded and independent,
   and the `marker` baseline matches the one-job-per-GPU number, but no run was
   repeated both ways.
@@ -1403,9 +1417,9 @@ uv run exu-train --mode baseline --backbone decoder --encoder Qwen/Qwen3-0.6B \
   question, or a few questions that all appear in training.
 - The float16 path, which has no `GradScaler`, and any GPU older than Ampere.
 - Whether the temperature map absorbs the bias of section 8's smoothing.
-- Section 14 beyond one synthetic dataset: the Exu decoder on Qwen3.5-0.8B with more
-  than one seed, the Exu decoder at 2B and 4B, which recipe difference puts Unsloth
-  ahead on the same base, and any tuning beyond the epoch count.
+- Section 14 beyond one synthetic dataset: the Exu decoder at 2B and 4B, the
+  encoders with the cosine schedule, LoRA in Exu, and any tuning of Unsloth beyond
+  the epoch count.
 - A hard-label temperature in Exu, for callers who threshold on the top answer's
   confidence; section 14 shows what it costs on soft targets in Unsloth.
 

@@ -179,7 +179,9 @@ Useful knobs, with their defaults: `--epochs 4`, `--batch-size 8`,
 Both learning rates are constant unless `--lr-schedule cosine` is given, which
 decays them towards zero over the run. `--warmup-steps N` (default 0) ramps them up
 linearly over the first N updates, with either schedule; a warm-up as long as the
-whole run is refused.
+whole run is refused. For the decoder backbone, use the cosine schedule: on
+`typed-decisions` it took the Qwen3.5-0.8B decoder from KL 0.102 to 0.085 (section 14
+of `BENCHMARKS.md`). The encoder path has not been measured with it.
 
 ## 4. Train the policy
 
