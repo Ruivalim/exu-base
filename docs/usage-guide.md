@@ -186,6 +186,17 @@ on `typed-decisions` it took the Qwen3.5-0.8B decoder from KL 0.102 to 0.085
 (section 14 of `BENCHMARKS.md`). `--lr-schedule constant --warmup-steps 0` gives a
 decoder the constant rate it had before.
 
+`--lora-rank R` freezes the backbone and trains a rank-R update next to each of its
+linear layers, scaled by `--lora-alpha / R` (the alpha defaults to the rank). The
+decision head still trains in full. The backbone rate then defaults to `2e-4`, the
+rate of Unsloth's decision recipe at rank 16, since an update that starts from
+zero needs a larger rate than a full fine-tune. It needs much less memory than a full
+fine-tune: no optimizer state for the frozen weights, and on a GPU those weights are
+kept in the autocast dtype, which changes no result since autocast computes in it
+anyway. That is what fits Qwen3.5-2B on a 12 GB card. The update is merged into the
+weights after training, before calibration and saving, so the checkpoint is the same as one trained without adapters, and `exu-evaluate`
+and `exu-decide` need nothing new.
+
 ## 4. Train the policy
 
 Same pipeline, `--mode rlcd` instead of `baseline`, and the policy knobs become

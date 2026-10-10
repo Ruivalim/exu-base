@@ -17,6 +17,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Added
 
 - `exu-train --lr-schedule {constant,cosine}` and `--warmup-steps N`.
+- `exu-train --lora-rank R` and `--lora-alpha A`: low-rank adapters on every linear
+  layer of a frozen backbone, merged into the weights before saving, so the
+  checkpoint format is unchanged. `exu.lora` exposes `LoRALinear`, `apply_lora` and
+  `merge_lora`.
 
 ### Fixed
 

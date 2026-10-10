@@ -38,6 +38,7 @@ from .calibration import (
 from .checkpoint import Checkpoint, load_checkpoint, load_tokenizer, save_checkpoint
 from .data import DecisionDataset, TrainingBatch, TrainingExample, load_jsonl, write_jsonl
 from .decoder import DecoderDecisionModel, DecoderSequenceBuilder, EncodedOptions
+from .lora import LoRALinear, apply_lora, merge_lora
 from .metrics import (
     DecisionMetrics,
     ReferencePrior,
@@ -90,6 +91,7 @@ __all__ = [
     "DecoderSequenceBuilder",
     "EncodedOptions",
     "EncodedQuestion",
+    "LoRALinear",
     "Option",
     "PolicyConfig",
     "PolicyMetrics",
@@ -102,6 +104,7 @@ __all__ = [
     "TemperatureMap",
     "TrainingBatch",
     "TrainingExample",
+    "apply_lora",
     "bandit_loss",
     "build_model",
     "builder_for",
@@ -118,6 +121,7 @@ __all__ = [
     "log_score",
     "masked_log_softmax",
     "masked_softmax",
+    "merge_lora",
     "model_from_pretrained",
     "policy_gradient_loss",
     "proper_scoring_loss",

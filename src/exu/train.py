@@ -38,8 +38,9 @@ from .augmentation import OptionShuffler
 from .calibration import TemperatureMap, fit_temperature_map
 from .checkpoint import save_checkpoint
 from .data import DecisionDataset, TrainingBatch, load_jsonl
-from .devices import autocast_context, resolve_device
+from .devices import autocast_context, resolve_device, resolve_dtype
 from .evaluation import collect, metrics_for
+from .lora import apply_lora, merge_lora
 from .model import DEFAULT_DECODER, DEFAULT_ENCODER, SCORERS, ExuConfig, masked_log_softmax
 from .policy import PolicyConfig, policy_gradient_loss, sigma_for
 from .scoring import CONFIDENT_MISS, confident_misses, proper_scoring_loss, reward_definition
@@ -53,6 +54,9 @@ _DEFAULT_BACKBONE_LR = {"encoder": 2.5e-5, "decoder": 1e-5}
 # The decoder gained from a decaying rate on typed-decisions and the encoder did not
 # (BENCHMARKS.md, section 14).
 _DEFAULT_SCHEDULE = {"encoder": ("constant", 0), "decoder": ("cosine", 10)}
+# Adapters train a small update from zero and want a larger rate than a full
+# fine-tune: this is the rate of Unsloth's decision recipe, also rank 16.
+_DEFAULT_LORA_LR = 2e-4
 LR_SCHEDULES = ("constant", "cosine")
 
 
@@ -100,9 +104,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--encoder-lr",
         type=_positive_float,
-        help="learning rate of the backbone (default: 2.5e-5, or 1e-5 with --backbone decoder)",
+        help="learning rate of the backbone, or of its adapters with --lora-rank (default: "
+        "2.5e-5, or 1e-5 with --backbone decoder, or 2e-4 with --lora-rank)",
     )
     parser.add_argument("--head-lr", type=_positive_float, default=1e-4)
+    parser.add_argument(
+        "--lora-rank",
+        type=_non_negative_int,
+        default=0,
+        help="freeze the backbone and train a rank-R update on each of its linear layers, "
+        "merged into the weights before saving. 0 trains the whole backbone (default: 0)",
+    )
+    parser.add_argument(
+        "--lora-alpha",
+        type=_positive_float,
+        help="the update is scaled by alpha / rank (default: the rank, a scale of 1)",
+    )
     parser.add_argument("--weight-decay", type=_non_negative_float, default=0.01)
     parser.add_argument(
         "--lr-schedule",
@@ -167,7 +184,9 @@ def build_parser() -> argparse.ArgumentParser:
 def resolve_defaults(args: argparse.Namespace) -> argparse.Namespace:
     """Fill the flags whose default depends on the backbone or on another flag."""
     args.encoder = args.encoder or _DEFAULT_BACKBONE[args.backbone]
-    args.encoder_lr = args.encoder_lr or _DEFAULT_BACKBONE_LR[args.backbone]
+    default_lr = _DEFAULT_LORA_LR if args.lora_rank else _DEFAULT_BACKBONE_LR[args.backbone]
+    args.encoder_lr = args.encoder_lr or default_lr
+    args.lora_alpha = args.lora_alpha or (float(args.lora_rank) if args.lora_rank else None)
     schedule, warmup = _DEFAULT_SCHEDULE[args.backbone]
     args.lr_schedule = args.lr_schedule or schedule
     # A default warm-up may be shortened to fit the run; an explicit one may not.
@@ -202,6 +221,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise FileExistsError(f"output path already exists: {args.output}")
     if args.backbone == "decoder" and args.scorer != "marker":
         parser.error("--scorer marker-cls exists for the encoder's markers only")
+    if args.lora_alpha is not None and not args.lora_rank:
+        parser.error("--lora-alpha needs --lora-rank")
     resolve_defaults(args)
 
     _set_seed(args.seed)
@@ -229,13 +250,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     model = model_from_pretrained(config)
+    adapted = 0
+    if args.lora_rank:
+        # Frozen weights in the autocast dtype: the same forward pass, half the memory.
+        adapted = apply_lora(
+            model.backbone, args.lora_rank, args.lora_alpha, base_dtype=resolve_dtype(device)
+        )
+        print(f"lora: rank {args.lora_rank} on {adapted} linear layers, backbone frozen")
     if args.grad_checkpointing:
         model.backbone.gradient_checkpointing_enable()
     model = model.to(device)
     backbone_ids = {id(parameter) for parameter in model.backbone.parameters()}
     optimizer = AdamW(
         [
-            {"params": model.backbone.parameters(), "lr": args.encoder_lr},
+            {
+                "params": [p for p in model.backbone.parameters() if p.requires_grad],
+                "lr": args.encoder_lr,
+            },
             {
                 "params": [
                     parameter
@@ -284,6 +315,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             + (f" reward={stats.mean_reward:.4f}" if stats.mean_reward is not None else "")
         )
 
+    # Merged before any evaluation, so the temperatures are fitted on the float32 model
+    # the checkpoint will hold, not on its lower-precision frozen copy.
+    merge_lora(model.backbone)
     uncalibrated = TemperatureMap()
     validation = metrics_for(collect(model, validation_loader, device), uncalibrated)
     test = metrics_for(collect(model, test_loader, device), uncalibrated) if test_loader else None
@@ -351,6 +385,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "head_lr": args.head_lr,
         "lr_schedule": args.lr_schedule,
         "warmup_steps": args.warmup_steps,
+        "lora": (
+            {"rank": args.lora_rank, "alpha": args.lora_alpha, "layers": adapted}
+            if args.lora_rank
+            else None
+        ),
         "grad_checkpointing": args.grad_checkpointing,
         "scorer": args.scorer,
         "epochs": args.epochs,

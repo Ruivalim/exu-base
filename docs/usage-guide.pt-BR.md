@@ -189,6 +189,18 @@ menos: no `typed-decisions` isso levou o decoder em Qwen3.5-0.8B de KL 0.102 par
 0.085 (seção 14 do `BENCHMARKS.md`). `--lr-schedule constant --warmup-steps 0` devolve
 ao decoder a taxa constante de antes.
 
+`--lora-rank R` congela o backbone e treina uma atualização de posto R ao lado de
+cada camada linear dele, escalada por `--lora-alpha / R` (o alpha tem como default o
+posto). A cabeça de decisão continua treinando inteira. A taxa do backbone passa a ter
+default `2e-4`, a da receita de decisão do Unsloth com posto 16, porque uma
+atualização que parte do zero pede uma taxa maior que um fine-tune completo. Gasta
+bem menos memória que um fine-tune completo: não há estado do otimizador para os pesos
+congelados, e na GPU esses pesos ficam no dtype do autocast, o que não muda resultado
+nenhum porque o autocast já calcula nele. É isso que faz o Qwen3.5-2B caber numa placa
+de 12 GB. A atualização é somada aos pesos depois do treino, antes da calibração e de
+salvar, então o checkpoint é igual ao de um treino sem
+adaptadores, e o `exu-evaluate` e o `exu-decide` não precisam de nada novo.
+
 ## 4. Treine a política
 
 Mesmo pipeline, `--mode rlcd` no lugar de `baseline`, e os botões da política

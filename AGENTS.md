@@ -44,6 +44,7 @@ src/exu/          the package, all of it (there is no second source tree)
   sequence.py      SequenceBuilder: one sequence per question, markers, token budget
   model.py         ExuModel: encoder + type embedding + 2 layers + scorer + act head
   decoder.py       experimental: one decoder sequence per option, read at the last token
+  lora.py          low-rank adapters on a frozen backbone, merged before saving
   architecture.py  picks the model and the builder from a config (and so a checkpoint)
   scoring.py       log, spherical and ranked-probability scores; composite reward
   policy.py        perturbed-logit policy gradient, advantages, sigma schedule
