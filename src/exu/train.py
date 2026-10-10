@@ -317,7 +317,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Merged before any evaluation, so the temperatures are fitted on the float32 model
     # the checkpoint will hold, not on its lower-precision frozen copy.
-    merge_lora(model.backbone)
+    if args.lora_rank:
+        # On the CPU, with the optimizer gone: next to the frozen copy, the float32
+        # weights of a 2B base do not fit on a 12 GB card.
+        del optimizer, scheduler
+        model.to("cpu")
+        merge_lora(model.backbone)
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+        model.to(device)
     uncalibrated = TemperatureMap()
     validation = metrics_for(collect(model, validation_loader, device), uncalibrated)
     test = metrics_for(collect(model, test_loader, device), uncalibrated) if test_loader else None
