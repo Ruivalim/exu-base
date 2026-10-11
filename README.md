@@ -129,9 +129,11 @@ from exu import DecisionRuntime
 runtime = DecisionRuntime.load("artifacts/my-model")
 decision = runtime.decide("I was charged twice for the same invoice.", route)
 print(decision.label, decision.confidence)  # billing 0.87
+decisions = runtime.decide_all(ticket, [route, urgency, refund])  # one state, many questions
 ```
 
-Or from a shell, one question with flags or a JSONL batch with `--input`:
+Or from a shell, one question with flags or a JSONL batch with `--input`, where a
+record can carry one `question` or a list of `questions` about its state:
 
 ```bash
 exu-decide --checkpoint artifacts/my-model \

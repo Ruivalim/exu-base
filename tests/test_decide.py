@@ -359,3 +359,120 @@ def test_top_only_and_metrics_combine(capsys, checkpoint) -> None:
     assert code == 0
     assert set(rows[0]) == {"label", "confidence", "metrics"}
     assert json.loads(err)["questions"] == 1
+
+
+def _questions_record(identifier: str | None, ids: list[str | None]) -> dict:
+    """A record with several questions about the state of the first test row."""
+    rows = [json.loads(line) for line in _test_rows()]
+    record: dict = {"state": rows[0]["state"], "questions": []}
+    if identifier is not None:
+        record["id"] = identifier
+    for own, row in zip(ids, rows, strict=False):
+        question = dict(row["question"])
+        if own is not None:
+            question["id"] = own
+        record["questions"].append(question)
+    return record
+
+
+def test_a_record_of_questions_answers_each_like_separate_records(
+    capsys, checkpoint, tmp_path
+) -> None:
+    record = _questions_record("case-1", ["route", None, "urgency"])
+    source = tmp_path / "questions.jsonl"
+    source.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    code, rows, _err = _run(capsys, checkpoint, "--input", str(source))
+
+    assert code == 0
+    assert [row["id"] for row in rows] == ["case-1/route", "case-1/1", "case-1/urgency"]
+    separate = tmp_path / "separate.jsonl"
+    separate.write_text(
+        "\n".join(
+            json.dumps({"state": record["state"], "question": q}) for q in record["questions"]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _code, expected, _err = _run(capsys, checkpoint, "--input", str(separate))
+    for row, alone in zip(rows, expected, strict=True):
+        assert list(row["probabilities"].values()) == pytest.approx(
+            list(alone["probabilities"].values()), abs=1e-5
+        )
+
+
+def test_without_a_record_id_only_the_question_ids_name_the_answers(
+    capsys, checkpoint, tmp_path
+) -> None:
+    source = tmp_path / "questions.jsonl"
+    source.write_text(json.dumps(_questions_record(None, ["a", None])) + "\n", encoding="utf-8")
+
+    code, rows, _err = _run(capsys, checkpoint, "--input", str(source))
+
+    assert code == 0
+    assert rows[0]["id"] == "a"
+    assert "id" not in rows[1]
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        (lambda record: record.update(question=record["questions"][0]), "not both"),
+        (lambda record: record.update(questions=[]), "non-empty list"),
+        (lambda record: record.update(questions={"kind": "noul"}), "non-empty list"),
+        (lambda record: record["questions"][1].update(id="route"), "appears twice"),
+        (lambda record: record["questions"][1].pop("instruction"), "question 1"),
+        (lambda record: record["questions"].append("not a question"), "question 3"),
+    ],
+)
+def test_a_broken_record_of_questions_is_named_and_nothing_is_answered(
+    capsys, checkpoint, tmp_path, change, expected: str
+) -> None:
+    record = _questions_record("case-1", ["route", None, "urgency"])
+    change(record)
+    source = tmp_path / "broken.jsonl"
+    source.write_text(_test_rows()[0] + "\n" + json.dumps(record) + "\n", encoding="utf-8")
+
+    code, rows, err = _run(capsys, checkpoint, "--input", str(source))
+
+    assert code == 1
+    assert "line 2" in err
+    assert expected in err
+    assert rows == []
+
+
+@pytest.mark.parametrize(
+    ("sizes", "batch", "expected"),
+    [
+        ([2, 2, 2], 3, [2, 2, 2]),  # a record that would straddle two batches waits
+        ([2, 2, 2], 4, [4, 2]),
+        # A record larger than a batch is split, and its rest can share the next batch.
+        ([1, 5, 1], 3, [1, 3, 3]),
+        ([3], 3, [3]),
+    ],
+)
+def test_batches_keep_a_record_together_when_it_fits(sizes, batch, expected) -> None:
+    records = [
+        [(f"{index}/{n}", "state", None) for n in range(size)] for index, size in enumerate(sizes)
+    ]
+
+    chunks = list(decide._chunks(records, batch))
+
+    assert [len(chunk) for chunk in chunks] == expected
+    flat = [question for record in records for question in record]
+    assert [question for chunk in chunks for question in chunk] == flat
+
+
+def test_decide_all_answers_like_decide_many(checkpoint) -> None:
+    runtime = DecisionRuntime.load(checkpoint, device="cpu")
+    examples = smoke_examples("test")[:3]
+    state = examples[0].state
+    questions = [example.question for example in examples]
+
+    together = runtime.decide_all(state, questions)
+    alone = [runtime.decide(state, question) for question in questions]
+
+    for left, right in zip(together, alone, strict=True):
+        assert left.probabilities == pytest.approx(right.probabilities, abs=1e-5)
+    with pytest.raises(ValueError, match="empty"):
+        runtime.decide_all(state, [])

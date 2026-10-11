@@ -7,6 +7,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- `DecisionRuntime.decide_all(state, questions)`: several questions about one state
+  in one forward pass.
+- `exu-decide --input` takes a record with `questions`, a list of questions about
+  its one state, each with an optional `id`; answers are named `<record id>/<question
+  id or position>`. The questions of a record share a batch whenever the batch size
+  allows, so a decoder reads their state once.
+
 ### Breaking
 
 - `EncodedOptions` has a required `prefix_length`, the leading tokens its sequences

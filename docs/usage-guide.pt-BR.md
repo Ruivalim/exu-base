@@ -311,9 +311,12 @@ decision = runtime.decide(
 print(decision.label, decision.probabilities, decision.confidence, decision.should_act)
 ```
 
-- `runtime.decide_many([(estado, pergunta), ...])` responde um lote de perguntas
-  num forward pass só. Prefira isso a um loop: o custo é reencodar o estado uma
-  vez por pergunta nos dois casos, e o lote é bem mais rápido por pergunta.
+- `runtime.decide_all(estado, [pergunta, ...])` responde várias perguntas sobre um
+  estado num forward pass só, e `runtime.decide_many([(estado, pergunta), ...])`
+  qualquer mistura de estados. Prefira qualquer um dos dois a um loop: o lote é bem
+  mais rápido por pergunta, e um checkpoint decoder lê o estado uma vez para todas
+  as perguntas sobre ele no lote. Um checkpoint encoder reencoda o estado uma vez
+  por pergunta nos dois casos.
 - Carregue uma vez e mantenha o runtime residente. Uma carga fria custa segundos.
 - `confidence` e `entropy_confidence` são escalas diferentes. O `should_act` usa
   a probabilidade máxima calibrada. Leia a seção de confiança do
@@ -346,7 +349,23 @@ exu-decide --checkpoint artifacts/exu --input perguntas.jsonl --output decisoes.
 
 O registro precisa de `state` e `question`, no formato do dataset. O `id` é
 devolvido quando existe e o resto é ignorado, então um arquivo de dataset funciona
-como está. A saída é um objeto JSON por pergunta, na ordem da entrada, com `label`,
+como está. No lugar de `question`, o registro pode trazer `questions`, uma lista de
+perguntas sobre o mesmo estado:
+
+```json
+{"id": "ticket-7", "state": "Fui cobrado duas vezes pela mesma fatura.",
+ "questions": [{"id": "rota", "kind": "choice", "instruction": "Para onde vai isto?",
+                "options": [{"name": "cobrança"}, {"name": "suporte"}]},
+               {"kind": "noul", "instruction": "É um pedido de reembolso?",
+                "options": [{"name": "não"}, {"name": "sim"}]}]}
+```
+
+As respostas se chamam `ticket-7/rota` e `ticket-7/1`: o id do registro e depois o
+`id` da própria pergunta ou, sem ele, a posição dela a partir de 0. Um registro tem
+`question` ou `questions`, nunca os dois, os ids das perguntas não se repetem dentro
+do registro, e uma pergunta quebrada é apontada pela linha e pela posição. As
+perguntas de um registro dividem o mesmo forward pass sempre que o `--batch-size`
+deixa. A saída é um objeto JSON por pergunta, na ordem da entrada, com `label`,
 `confidence`, `entropy_confidence`, `should_act`, `expected_level`, e
 `probabilities` e `logits` indexados pelo nome da opção.
 

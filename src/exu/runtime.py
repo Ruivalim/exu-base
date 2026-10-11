@@ -13,6 +13,7 @@ confuse:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -70,6 +71,15 @@ class DecisionRuntime:
 
     def decide(self, state: str, question: DecisionQuestion) -> Decision:
         return self.decide_many([(state, question)])[0]
+
+    def decide_all(self, state: str, questions: Sequence[DecisionQuestion]) -> list[Decision]:
+        """Answer several questions about one state, in one forward pass.
+
+        A decoder checkpoint reads the state once for all of them.
+        """
+        if not questions:
+            raise ValueError("questions cannot be empty")
+        return self.decide_many([(state, question) for question in questions])
 
     def decide_many(self, pairs: list[tuple[str, DecisionQuestion]]) -> list[Decision]:
         if not pairs:

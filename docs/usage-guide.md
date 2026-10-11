@@ -303,9 +303,12 @@ decision = runtime.decide(
 print(decision.label, decision.probabilities, decision.confidence, decision.should_act)
 ```
 
-- `runtime.decide_many([(state, question), ...])` answers a batch of questions in
-  one forward pass. Prefer it over a loop: the cost is re-encoding the state once
-  per question either way, and the batch is far faster per question.
+- `runtime.decide_all(state, [question, ...])` answers several questions about one
+  state in one forward pass, and `runtime.decide_many([(state, question), ...])`
+  any mix of states. Prefer either over a loop: the batch is far faster per
+  question, and a decoder checkpoint reads a state once for all the questions about
+  it in the batch. An encoder checkpoint re-encodes the state once per question
+  either way.
 - Load once and keep the runtime resident. A cold load is seconds.
 - `confidence` and `entropy_confidence` are different scales. `should_act` uses
   the calibrated maximum probability. Read the confidence section of
@@ -336,7 +339,22 @@ exu-decide --checkpoint artifacts/exu --input questions.jsonl --output decisions
 ```
 
 A record needs `state` and `question`, in the dataset format. `id` is echoed when
-it is there and everything else is ignored, so a dataset file works as it is. The
+it is there and everything else is ignored, so a dataset file works as it is. A
+record can carry `questions` instead, a list of questions about its one state:
+
+```json
+{"id": "ticket-7", "state": "I was charged twice for the same invoice.",
+ "questions": [{"id": "route", "kind": "choice", "instruction": "Where should this go?",
+                "options": [{"name": "billing"}, {"name": "support"}]},
+               {"kind": "noul", "instruction": "Is this a refund request?",
+                "options": [{"name": "no"}, {"name": "yes"}]}]}
+```
+
+Its answers are named `ticket-7/route` and `ticket-7/1`: the record's id, then the
+question's own `id` or, without one, its position from 0. A record has `question`
+or `questions`, never both, question ids must differ within a record, and a broken
+question is named by its line and position. The questions of one record share a
+forward pass whenever `--batch-size` allows. The
 output is one JSON object per question, in input order, with `label`,
 `confidence`, `entropy_confidence`, `should_act`, `expected_level`, and
 `probabilities` and `logits` keyed by option name.

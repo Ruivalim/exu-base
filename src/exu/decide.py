@@ -6,9 +6,14 @@ Two ways in, one way out:
 - many questions, one JSON record per line, from a file or from stdin. A record
   needs ``state`` and ``question``, in the dataset format. ``id`` is echoed when it
   is there, and everything else (``target``, ``split``...) is ignored, so a dataset
-  file works as it is.
+  file works as it is. A record can instead carry ``questions``, a list of
+  questions about its one state, each with an optional ``id`` of its own; its
+  answers are named ``<record id>/<question id>``, or by the question's position
+  from 0 when it has no id.
 
-The output is one JSON object per question, in input order. The whole input is
+The questions of one record go into the same forward pass whenever the batch size
+allows, so a decoder checkpoint reads their state once. The output is one JSON
+object per question, in input order. The whole input is
 parsed and validated before the first forward pass: a broken line is named and
 nothing is answered, so a pipeline never receives half a result.
 
@@ -97,7 +102,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     single = _single_question(parser, args)
 
     try:
-        questions = [single] if single else list(_read_questions(args.input))
+        records = [[single]] if single else list(_read_records(args.input))
+        questions = [question for record in records for question in record]
         if not questions:
             raise ValueError("the input has no questions")
         started = time.perf_counter()
@@ -105,8 +111,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         load_ms = (time.perf_counter() - started) * 1000.0
         batch_times: list[float] = []
         with _destination(args.output) as stream:
-            for start in range(0, len(questions), args.batch_size):
-                chunk = questions[start : start + args.batch_size]
+            start = 0
+            for chunk in _chunks(records, args.batch_size):
                 started = time.perf_counter()
                 decisions = _decide(runtime, chunk, first_line=start)
                 batch_ms = (time.perf_counter() - started) * 1000.0
@@ -121,6 +127,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         }
                     stream.write(json.dumps(row, ensure_ascii=False))
                     stream.write("\n")
+                start += len(chunk)
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
@@ -181,7 +188,7 @@ def _single_question(parser: argparse.ArgumentParser, args: argparse.Namespace) 
         parser.error(str(error))
 
 
-def _read_questions(source: str) -> Iterator[Question]:
+def _read_records(source: str) -> Iterator[list[Question]]:
     if source == "-":
         yield from _parse_lines(sys.stdin)
         return
@@ -189,7 +196,8 @@ def _read_questions(source: str) -> Iterator[Question]:
         yield from _parse_lines(stream)
 
 
-def _parse_lines(stream: TextIO) -> Iterator[Question]:
+def _parse_lines(stream: TextIO) -> Iterator[list[Question]]:
+    """One list of questions per record: one for ``question``, several for ``questions``."""
     for line_number, line in enumerate(stream, start=1):
         if not line.strip():
             continue
@@ -198,15 +206,58 @@ def _parse_lines(stream: TextIO) -> Iterator[Question]:
             if not isinstance(record, dict):
                 raise ValueError("a record must be a JSON object")
             identifier = record.get("id")
-            yield (
-                None if identifier is None else str(identifier),
-                state_text(record["state"]),
-                question_from_record(record["question"]),
-            )
+            identifier = None if identifier is None else str(identifier)
+            state = state_text(record["state"])
+            if "questions" not in record:
+                yield [(identifier, state, question_from_record(record["question"]))]
+                continue
+            if "question" in record:
+                raise ValueError("a record has question or questions, not both")
+            yield _record_questions(identifier, state, record["questions"])
         except KeyError as error:
             raise ValueError(f"line {line_number}: missing field {error.args[0]!r}") from error
         except (json.JSONDecodeError, TypeError, ValueError) as error:
             raise ValueError(f"line {line_number}: {error}") from error
+
+
+def _record_questions(identifier: str | None, state: str, raw: Any) -> list[Question]:
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("questions must be a non-empty list")
+    questions: list[Question] = []
+    seen: set[str] = set()
+    for position, item in enumerate(raw):
+        try:
+            own = item.get("id") if isinstance(item, dict) else None
+            name = str(position) if own is None else str(own)
+            if name in seen:
+                raise ValueError(f"the id {name!r} appears twice")
+            seen.add(name)
+            if identifier is not None:
+                name = f"{identifier}/{name}"
+            elif own is None:
+                name = None
+            questions.append((name, state, question_from_record(item)))
+        except KeyError as error:
+            raise ValueError(f"question {position}: missing field {error.args[0]!r}") from error
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"question {position}: {error}") from error
+    return questions
+
+
+def _chunks(records: Sequence[list[Question]], size: int) -> Iterator[list[Question]]:
+    """Batches of at most ``size`` questions that do not split a record unless it is larger."""
+    chunk: list[Question] = []
+    for record in records:
+        if chunk and len(chunk) + len(record) > size:
+            yield chunk
+            chunk = []
+        for question in record:
+            chunk.append(question)
+            if len(chunk) == size:
+                yield chunk
+                chunk = []
+    if chunk:
+        yield chunk
 
 
 def _decide(runtime: DecisionRuntime, chunk: Sequence[Question], first_line: int) -> list[Decision]:
