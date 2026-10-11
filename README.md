@@ -145,7 +145,8 @@ exu-decide --checkpoint artifacts/my-model \
 ## Data
 
 One JSONL record per decision. The target is a distribution, not a label, so soft
-targets from several annotators or a teacher model are first-class.
+targets from several annotators or a teacher model are first-class. An optional
+`context` (a policy, a rubric) is read before the state with a budget of its own.
 
 ```json
 {

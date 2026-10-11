@@ -50,6 +50,11 @@ Regras que importam, com a lista completa em [dataset-format.md](dataset-format.
   de enganar a si mesmo com esta arquitetura.
 - Escreva a `description` de cada opção à mão. É o que o modelo lê de fato na hora
   de decidir, e normalmente é dali que vem a acurácia.
+- `context` é opcional: aquilo de que a resposta depende além do estado, como a
+  política pela qual o caso é julgado. Ele é lido antes do estado, com orçamento
+  próprio, `--context-budget` (256 tokens), e um contexto acima dele é recusado,
+  nunca cortado. O modelo só aprende a usar o contexto com registros em que ele
+  muda o alvo.
 
 Para converter um dataset que já existe, monte objetos `TrainingExample` direto
 de registros, ou com `DecisionQuestion`:
@@ -134,8 +139,9 @@ uv run exu-train \
 - Uma base de visão e linguagem como `Qwen/Qwen3.5-0.8B` funciona: a cabeça lê os
   tamanhos do `text_config` dela, e a torre de visão é carregada mas nunca usada.
   O 0.8B dela não coube numa placa de 12 GB, estourou a memória no estado do AdamW.
-- `--header-budget` é o espaço para tudo menos o estado numa sequência. Uma
-  pergunta cuja opção mais longa não cabe levanta erro em vez de ser cortada.
+- `--header-budget` é o espaço para tudo menos o contexto e o estado numa
+  sequência. Uma pergunta cuja opção mais longa não cabe levanta erro em vez de ser
+  cortada.
 - As opções nunca se enxergam, então a resposta não pode depender da ordem:
   `--option-shuffle` não muda nada e a `stability` é 1.0 por construção.
 - `--scorer marker-cls` não se aplica e é recusado.
@@ -178,7 +184,10 @@ Botões úteis, com os defaults: `--epochs 4`, `--batch-size 8`, `--grad-accum 1
 `--seed 17`, `--encoder-lr 2.5e-5` (`1e-5` com `--backbone decoder`),
 `--head-lr 1e-4`, `--weight-decay 0.01`, `--max-grad-norm 1.0`,
 `--max-length 512`, `--header-budget 192` (ou o `--max-length`, se for menor),
-`--calibration-min-samples 64`, `--log-every 0`. O `--grad-checkpointing` vem
+`--context-budget 256`, `--calibration-min-samples 64`, `--log-every 0`. Antes de
+carregar o modelo, o treino monta cada registro uma vez, então uma pergunta ou um
+contexto que não cabe no orçamento é apontado pelo id do registro, em vez de falhar
+no meio de uma época. O `--grad-checkpointing` vem
 desligado.
 
 `--lr-schedule cosine` reduz as duas taxas de aprendizado até perto de zero ao longo
@@ -311,6 +320,9 @@ decision = runtime.decide(
 print(decision.label, decision.probabilities, decision.confidence, decision.should_act)
 ```
 
+- Toda entrada aceita um contexto: `runtime.decide(estado, pergunta, contexto)`,
+  `runtime.decide_all(estado, perguntas, contexto)`, e itens
+  `(estado, pergunta, contexto)` no `decide_many`.
 - `runtime.decide_all(estado, [pergunta, ...])` responde várias perguntas sobre um
   estado num forward pass só, e `runtime.decide_many([(estado, pergunta), ...])`
   qualquer mistura de estados. Prefira qualquer um dos dois a um loop: o lote é bem
@@ -339,7 +351,8 @@ exu-decide --checkpoint artifacts/exu \
 `--option NOME[=DESCRIÇÃO]` se repete, e só o primeiro `=` separa os dois.
 `--kind score` recebe `--level TEXTO`, do menor para o maior, e `--kind noul`
 responde `No` ou `Yes`, a menos que `--false-option` e `--true-option` digam outra
-coisa. `--state-file` lê o estado de um arquivo.
+coisa. `--state-file` lê o estado de um arquivo, e `--context` ou `--context-file`
+acrescenta um contexto.
 
 Muitas perguntas, um registro JSON por linha, de um arquivo ou do stdin com `-`:
 
@@ -348,8 +361,8 @@ exu-decide --checkpoint artifacts/exu --input perguntas.jsonl --output decisoes.
 ```
 
 O registro precisa de `state` e `question`, no formato do dataset. O `id` é
-devolvido quando existe e o resto é ignorado, então um arquivo de dataset funciona
-como está. No lugar de `question`, o registro pode trazer `questions`, uma lista de
+devolvido quando existe, o `context` é lido como o do dataset, e o resto é ignorado,
+então um arquivo de dataset funciona como está. No lugar de `question`, o registro pode trazer `questions`, uma lista de
 perguntas sobre o mesmo estado:
 
 ```json
@@ -394,6 +407,7 @@ dispositivo e precisão estão em [checkpoints.md](checkpoints.md).
 | --- | --- |
 | `too many options for configured header_budget` | As opções da pergunta não cabem no cabeçalho. Com os defaults, umas 30 opções é o teto. Aumente o `--header-budget` (e o `--max-length` junto), ou decida em duas etapas. |
 | `tokenizer must provide mask_token_id` | O encoder é decoder-only ou não tem token de máscara. Escolha um encoder bidirecional que tenha, ou treine com `--backbone decoder`. |
+| `context takes N tokens, more than the configured context_budget` | O contexto do registro não cabe. Aumente o `--context-budget` (e o `--max-length` junto), ou encurte o contexto: ele nunca é cortado. |
 | `question takes N tokens without the state` | Só no decoder: a instrução mais a opção mais longa não cabem no `--header-budget`. Aumente ele, junto com o `--max-length`, ou encurte os textos das opções. |
 | `each target distribution must sum to one` | Corrija o `target` do registro citado no erro. |
 | `output path already exists` | O `--output` se recusa a sobrescrever. Escolha um diretório novo. |

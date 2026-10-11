@@ -6,7 +6,7 @@ Two ways in, one way out:
 - many questions, one JSON record per line, from a file or from stdin. A record
   needs ``state`` and ``question``, in the dataset format. ``id`` is echoed when it
   is there, and everything else (``target``, ``split``...) is ignored, so a dataset
-  file works as it is. A record can instead carry ``questions``, a list of
+  file works as it is, ``context`` included. A record can instead carry ``questions``, a list of
   questions about its one state, each with an optional ``id`` of its own; its
   answers are named ``<record id>/<question id>``, or by the question's position
   from 0 when it has no id.
@@ -39,11 +39,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, TextIO
 
-from .data import question_from_record, state_text
+from .data import context_text, question_from_record, state_text
 from .runtime import Decision, DecisionRuntime
 from .types import DecisionQuestion, DecisionType, Option
 
-Question = tuple[str | None, str, DecisionQuestion]
+Question = tuple[str | None, str, DecisionQuestion, str | None]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -75,6 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
     one = parser.add_argument_group("one question")
     one.add_argument("--state", help="the text the question is about")
     one.add_argument("--state-file", type=Path, help="read the state from this UTF-8 file")
+    one.add_argument("--context", help="what the answer depends on besides the state")
+    one.add_argument("--context-file", type=Path, help="read the context from this UTF-8 file")
     one.add_argument("--kind", choices=[kind.value for kind in DecisionType], default="choice")
     one.add_argument("--instruction", help="the question the model reads")
     one.add_argument(
@@ -117,7 +119,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 decisions = _decide(runtime, chunk, first_line=start)
                 batch_ms = (time.perf_counter() - started) * 1000.0
                 batch_times.append(batch_ms)
-                for (identifier, _state, _question), decision in zip(chunk, decisions, strict=True):
+                for (identifier, *_rest), decision in zip(chunk, decisions, strict=True):
                     row = _render(identifier, decision, top_only=args.top_only)
                     if args.metrics:
                         row["metrics"] = {
@@ -157,7 +159,17 @@ def parse_option(text: str) -> Option:
 
 
 def _single_question(parser: argparse.ArgumentParser, args: argparse.Namespace) -> Question | None:
-    written = any((args.state, args.state_file, args.instruction, args.option, args.level))
+    written = any(
+        (
+            args.state,
+            args.state_file,
+            args.context,
+            args.context_file,
+            args.instruction,
+            args.option,
+            args.level,
+        )
+    )
     if args.input is not None:
         if written:
             parser.error("--input does not combine with the flags that write one question")
@@ -166,6 +178,8 @@ def _single_question(parser: argparse.ArgumentParser, args: argparse.Namespace) 
         parser.error("give --input, or write one question with --state and --instruction")
     if args.instruction is None:
         parser.error("one question needs --instruction")
+    if args.context is not None and args.context_file is not None:
+        parser.error("--context and --context-file do not combine")
     if (args.state is None) == (args.state_file is None):
         parser.error("one question needs exactly one of --state and --state-file")
     kind = DecisionType(args.kind)
@@ -183,7 +197,10 @@ def _single_question(parser: argparse.ArgumentParser, args: argparse.Namespace) 
         else:
             question = DecisionQuestion.noul(args.instruction, args.false_option, args.true_option)
         state = args.state if args.state is not None else args.state_file.read_text("utf-8")
-        return None, state_text(state), question
+        context = args.context
+        if args.context_file is not None:
+            context = args.context_file.read_text("utf-8")
+        return None, state_text(state), question, context_text(context)
     except (OSError, ValueError) as error:
         parser.error(str(error))
 
@@ -208,19 +225,22 @@ def _parse_lines(stream: TextIO) -> Iterator[list[Question]]:
             identifier = record.get("id")
             identifier = None if identifier is None else str(identifier)
             state = state_text(record["state"])
+            context = context_text(record.get("context"))
             if "questions" not in record:
-                yield [(identifier, state, question_from_record(record["question"]))]
+                yield [(identifier, state, question_from_record(record["question"]), context)]
                 continue
             if "question" in record:
                 raise ValueError("a record has question or questions, not both")
-            yield _record_questions(identifier, state, record["questions"])
+            yield _record_questions(identifier, state, context, record["questions"])
         except KeyError as error:
             raise ValueError(f"line {line_number}: missing field {error.args[0]!r}") from error
         except (json.JSONDecodeError, TypeError, ValueError) as error:
             raise ValueError(f"line {line_number}: {error}") from error
 
 
-def _record_questions(identifier: str | None, state: str, raw: Any) -> list[Question]:
+def _record_questions(
+    identifier: str | None, state: str, context: str | None, raw: Any
+) -> list[Question]:
     if not isinstance(raw, list) or not raw:
         raise ValueError("questions must be a non-empty list")
     questions: list[Question] = []
@@ -236,7 +256,7 @@ def _record_questions(identifier: str | None, state: str, raw: Any) -> list[Ques
                 name = f"{identifier}/{name}"
             elif own is None:
                 name = None
-            questions.append((name, state, question_from_record(item)))
+            questions.append((name, state, question_from_record(item), context))
         except KeyError as error:
             raise ValueError(f"question {position}: missing field {error.args[0]!r}") from error
         except (TypeError, ValueError) as error:
@@ -261,7 +281,7 @@ def _chunks(records: Sequence[list[Question]], size: int) -> Iterator[list[Quest
 
 
 def _decide(runtime: DecisionRuntime, chunk: Sequence[Question], first_line: int) -> list[Decision]:
-    pairs = [(state, question) for _identifier, state, question in chunk]
+    pairs = [(state, question, context) for _identifier, state, question, context in chunk]
     try:
         return runtime.decide_many(pairs)
     except ValueError:

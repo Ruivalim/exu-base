@@ -84,7 +84,7 @@ def test_one_record_without_a_family_keeps_the_other_families() -> None:
 class _QuestionBuilder:
     """Hands the question itself to the forward pass, so a stub can read its options."""
 
-    def build(self, state, question):
+    def build(self, state, question, context=None):
         return question
 
 

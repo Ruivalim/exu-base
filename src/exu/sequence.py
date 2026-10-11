@@ -6,6 +6,7 @@ The layout, one sequence per question::
     [MASK] <option 0> [SEP]
     [MASK] <option 1> [SEP]
     ...
+    [<context> [SEP]]
     <state, truncated from the right> [SEP]
 
 The ``[MASK]`` before each option is a *marker*. Its hidden position is where
@@ -19,8 +20,13 @@ Two properties matter and are tested:
   and each option has a ceiling; options cede tokens before the instruction does.
   The state gets the remainder. Runaway option lists fail loudly instead of
   silently producing a degenerate question.
+- An optional context (a policy, a rubric, background the question depends on)
+  goes before the state with a budget of its own, ``context_budget``. A context
+  over it raises instead of being cut, and the state is cut first: a rule read
+  half-way is worse than no rule. Without a context the sequence is the same as
+  it always was.
 - Only builder-owned mask tokens are markers. Literal mask strings are stripped
-  from instruction, option and state text first, so untrusted input cannot
+  from instruction, option, context and state text first, so untrusted input cannot
   inject fake markers.
 """
 
@@ -72,7 +78,9 @@ class DecisionBuilder(Protocol):
     not a change everywhere a batch is made.
     """
 
-    def build(self, state: str, question: DecisionQuestion) -> EncodedDecision: ...
+    def build(
+        self, state: str, question: DecisionQuestion, context: str | None = None
+    ) -> EncodedDecision: ...
 
     # Takes what this builder's own ``build`` returned, hence ``Any``: a protocol
     # parameter typed EncodedDecision would reject every concrete builder.
@@ -90,6 +98,7 @@ class SequenceConfig:
     max_option_tokens: int = 48
     min_instruction_tokens: int = 8
     min_option_text_tokens: int = 3
+    context_budget: int = 256
     type_prefixes: Mapping[str, str] = field(default_factory=lambda: dict(DEFAULT_TYPE_PREFIXES))
 
     def __post_init__(self) -> None:
@@ -97,6 +106,8 @@ class SequenceConfig:
             raise ValueError("max_length must be at least 16")
         if not 8 <= self.header_budget <= self.max_length:
             raise ValueError("header_budget must be between 8 and max_length")
+        if self.context_budget < 0:
+            raise ValueError("context_budget cannot be negative")
         if self.max_option_tokens < self.min_option_text_tokens + 1:
             raise ValueError("max_option_tokens must leave room for marker and option text")
         if set(self.type_prefixes) != {"choice", "score", "noul"}:
@@ -111,6 +122,7 @@ class SequenceConfig:
             "max_option_tokens": self.max_option_tokens,
             "min_instruction_tokens": self.min_instruction_tokens,
             "min_option_text_tokens": self.min_option_text_tokens,
+            "context_budget": self.context_budget,
             "type_prefixes": dict(self.type_prefixes),
         }
 
@@ -122,6 +134,7 @@ class SequenceConfig:
             max_option_tokens=int(data.get("max_option_tokens", 48)),
             min_instruction_tokens=int(data.get("min_instruction_tokens", 8)),
             min_option_text_tokens=int(data.get("min_option_text_tokens", 3)),
+            context_budget=int(data.get("context_budget", 256)),
             type_prefixes=dict(data.get("type_prefixes", DEFAULT_TYPE_PREFIXES)),  # type: ignore[arg-type]
         )
 
@@ -151,8 +164,11 @@ class SequenceBuilder:
         self.config = config or SequenceConfig()
         self._validate_tokenizer()
 
-    def build(self, state: str, question: DecisionQuestion) -> EncodedQuestion:
+    def build(
+        self, state: str, question: DecisionQuestion, context: str | None = None
+    ) -> EncodedQuestion:
         clean_state = self._clean(state)
+        context_ids = self._context_ids(context)
         prefix_ids = self._encode(self.config.type_prefixes[question.kind.value])
         instruction_ids = self._encode(self._clean(question.instruction))
         option_ids = [self._encode(self._clean(option.render())) for option in question.options]
@@ -169,6 +185,10 @@ class SequenceBuilder:
             marker_positions.append(len(header))
             header.append(self._required(self.tokenizer.mask_token_id))
             header.extend(ids[:limit])
+            header.append(self._required(self.tokenizer.sep_token_id))
+
+        if context_ids:
+            header.extend(context_ids)
             header.append(self._required(self.tokenizer.sep_token_id))
 
         state_limit = self.config.max_length - len(header) - 1
@@ -267,6 +287,12 @@ class SequenceBuilder:
         ]
         return limits, available - sum(limits)
 
+    def _context_ids(self, context: str | None) -> list[int]:
+        return context_ids(
+            self._encode(self._clean(context)) if context is not None else None,
+            self.config.context_budget,
+        )
+
     def _clean(self, value: str) -> str:
         """Strip the literal mask string from untrusted text, repeatedly.
 
@@ -298,3 +324,16 @@ class SequenceBuilder:
         if value is None:
             raise ValueError("required tokenizer token id is missing")
         return value
+
+
+def context_ids(ids: list[int] | None, budget: int) -> list[int]:
+    """A context's token ids, checked against its budget. ``None`` is no context."""
+    if ids is None:
+        return []
+    if not ids:
+        raise ValueError("context cannot be empty")
+    if len(ids) > budget:
+        raise ValueError(
+            f"context takes {len(ids)} tokens, more than the configured context_budget of {budget}"
+        )
+    return ids

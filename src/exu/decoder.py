@@ -5,7 +5,8 @@ A causal decoder cannot do that: a marker does not see the option text after it.
 So this path builds one sequence per option and reads the hidden state of the
 last token::
 
-    State: <state, truncated from the right>
+    [Context: <context>
+    ]State: <state, truncated from the right>
     <type prefix>
     Question: <instruction>
     Candidate: <option k>
@@ -29,8 +30,10 @@ Two properties follow from the layout:
   at most 0.0006 over 2,000 questions, from where the linear-attention kernels cut
   their chunks, and no answer changed.
 
-The question part of a sequence (everything but the state) has to fit
-``header_budget``; a question that does not fit raises instead of being cut.
+The question part of a sequence (everything but the context and the state) has to
+fit ``header_budget``, and the optional context has to fit ``context_budget``;
+either one that does not fit raises instead of being cut. Without a context the
+sequence is the same as it always was.
 Literal special-token strings are stripped from every untrusted text, so input
 cannot plant an end-of-sequence token. The read position is the builder's own
 last token either way, never a token found by its id.
@@ -57,7 +60,7 @@ from .model import (
     _distribution_features,
     masked_softmax,
 )
-from .sequence import SequenceConfig
+from .sequence import SequenceConfig, context_ids
 from .types import DecisionQuestion
 
 if TYPE_CHECKING:
@@ -109,8 +112,12 @@ class DecoderSequenceBuilder:
             token for token in getattr(tokenizer, "all_special_tokens", ()) if token
         )
         self._lead = self._encode("State: ")
+        self._context_lead = self._encode("Context: ")
+        self._context_end = self._encode("\nState: ")
 
-    def build(self, state: str, question: DecisionQuestion) -> EncodedOptions:
+    def build(
+        self, state: str, question: DecisionQuestion, context: str | None = None
+    ) -> EncodedOptions:
         kind = self.config.type_prefixes[question.kind.value]
         instruction = self._clean(question.instruction)
         tails = [
@@ -131,8 +138,18 @@ class DecoderSequenceBuilder:
             )
         # One cut for all K sequences, set by the longest tail: every option is
         # judged on the same state, and the prefix stays identical across them.
+        lead = self._lead
+        ids = context_ids(
+            self._encode(self._clean(context)) if context is not None else None,
+            self.config.context_budget,
+        )
+        if ids:
+            lead = [*self._context_lead, *ids, *self._context_end]
+            longest += len(lead) - len(self._lead)
         room = self.config.max_length - longest
-        prefix = (*self._lead, *self._encode(self._clean(state))[:room])
+        if room < 0:
+            raise ValueError("the context and the question leave no room in max_length")
+        prefix = (*lead, *self._encode(self._clean(state))[:room])
         eos = self.tokenizer.eos_token_id
         return EncodedOptions(
             sequences=tuple((*prefix, *tail, eos) for tail in tails),

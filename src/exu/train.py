@@ -37,14 +37,14 @@ from .architecture import DecisionModel, builder_for, model_from_pretrained
 from .augmentation import OptionShuffler
 from .calibration import TemperatureMap, fit_temperature_map
 from .checkpoint import save_checkpoint
-from .data import DecisionDataset, TrainingBatch, load_jsonl
+from .data import DecisionDataset, TrainingBatch, TrainingExample, load_jsonl
 from .devices import autocast_context, resolve_device, resolve_dtype
 from .evaluation import collect, metrics_for
 from .lora import apply_lora, merge_lora
 from .model import DEFAULT_DECODER, DEFAULT_ENCODER, SCORERS, ExuConfig, masked_log_softmax
 from .policy import PolicyConfig, policy_gradient_loss, sigma_for
 from .scoring import CONFIDENT_MISS, confident_misses, proper_scoring_loss, reward_definition
-from .sequence import SequenceConfig
+from .sequence import DecisionBuilder, SequenceConfig
 
 _DEFAULT_POLICY = PolicyConfig()
 # Per backbone. The decoder numbers in BENCHMARKS.md peak at 1e-5 and one epoch;
@@ -139,7 +139,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--header-budget",
         type=_positive_int,
-        help="tokens for everything but the state (default: 192, or --max-length if smaller)",
+        help="tokens for everything but the context and the state "
+        "(default: 192, or --max-length if smaller)",
+    )
+    parser.add_argument(
+        "--context-budget",
+        type=_non_negative_int,
+        default=256,
+        help="tokens a record's context may take; a longer context is refused, not cut",
     )
     parser.add_argument(
         "--grad-checkpointing",
@@ -228,7 +235,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     _set_seed(args.seed)
     device = resolve_device(args.device)
     policy = _policy_from_args(args) if args.mode == "rlcd" else None
-    sequence = SequenceConfig(max_length=args.max_length, header_budget=args.header_budget)
+    sequence = SequenceConfig(
+        max_length=args.max_length,
+        header_budget=args.header_budget,
+        context_budget=args.context_budget,
+    )
     config = ExuConfig(encoder_name=args.encoder, scorer=args.scorer, backbone=args.backbone)
 
     tokenizer = AutoTokenizer.from_pretrained(args.encoder)
@@ -236,6 +247,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     train_examples = load_jsonl(args.train, args.train_split)
     validation_examples = load_jsonl(args.validation, args.validation_split)
     test_examples = load_jsonl(args.test, args.test_split) if args.test else None
+    calibration_examples = (
+        load_jsonl(args.calibration, args.calibration_split)
+        if args.calibrate and args.calibration
+        else validation_examples
+    )
+    for examples in (train_examples, validation_examples, test_examples, calibration_examples):
+        _check_examples_fit(builder, examples or ())
     transform = OptionShuffler(args.seed) if args.option_shuffle else None
 
     train_loader = _loader(
@@ -333,11 +351,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     calibration_report = None
     temperature = uncalibrated
     if args.calibrate:
-        calibration_examples = (
-            load_jsonl(args.calibration, args.calibration_split)
-            if args.calibration
-            else validation_examples
-        )
         calibration_loader = _loader(
             DecisionDataset(calibration_examples, builder), args.batch_size
         )
@@ -540,6 +553,19 @@ def lr_multiplier(update: int, total_steps: int, warmup_steps: int, schedule: st
         return 1.0
     progress = (update - warmup_steps) / max(total_steps - warmup_steps, 1)
     return 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
+
+
+def _check_examples_fit(builder: DecisionBuilder, examples: Sequence[TrainingExample]) -> None:
+    """Build every example once, so a budget error names its record before any training.
+
+    A question whose options overflow the header, or a context over its budget,
+    otherwise surfaces in the middle of an epoch.
+    """
+    for example in examples:
+        try:
+            builder.build(example.state, example.question, example.context)
+        except ValueError as error:
+            raise ValueError(f"record {example.example_id!r}: {error}") from error
 
 
 def _loader(

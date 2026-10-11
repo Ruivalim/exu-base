@@ -49,6 +49,7 @@ def permute_example(example: TrainingExample, order: Sequence[int]) -> TrainingE
         split=example.split,
         family=example.family,
         language=example.language,
+        context=example.context,
     )
 
 

@@ -25,7 +25,7 @@ checkpoint/
     "temperature": 1.0,
     "action_costs": {"gain": 1.0, "loss": 3.0, "escalate": 0.5}
   },
-  "sequence": {"max_length": 512, "header_budget": 192, "...": "..."},
+  "sequence": {"max_length": 512, "header_budget": 192, "context_budget": 256, "...": "..."},
   "temperature": {"default": 1.0, "by_type": {"choice": 0.83}, "by_bucket": {"noul:2": 1.04}}
 }
 ```
@@ -37,6 +37,8 @@ its last token, experimental). `exu-evaluate`, `exu-decide` and `DecisionRuntime
 read it from here and take no flag for it. Format 1 has no `architecture` block
 and always means `encoder` with `markers`, so every checkpoint written before the
 decoder existed still loads; a format 1 file that does carry the block is refused.
+
+A checkpoint written before `context_budget` existed loads with the default, 256.
 
 `temperature` takes precedence in this order: the `(type, option count bucket)`
 cell, then the type, then `default`. Buckets are the ranges `2`, `3-5`, `6-10`

@@ -178,7 +178,7 @@ def order_robustness(
     base = _forward_probabilities(
         model,
         builder,
-        [builder.build(example.state, example.question) for example in examples],
+        [builder.build(example.state, example.question, example.context) for example in examples],
         [
             temperature.temperature(example.question.kind.value, example.option_count)
             for example in examples
@@ -196,7 +196,7 @@ def order_robustness(
         for _ in range(permutations):
             order = random_order(example.option_count, generator)
             permuted = permute_example(example, order)
-            encoded.append(builder.build(permuted.state, permuted.question))
+            encoded.append(builder.build(permuted.state, permuted.question, permuted.context))
             metadata.append((index, order))
             temperatures.append(
                 temperature.temperature(permuted.question.kind.value, permuted.option_count)
@@ -243,8 +243,8 @@ def latency_benchmark(
         if count < 1:
             raise ValueError("questions_per_call entries must be positive")
         chosen = [examples[index % len(examples)] for index in range(count)]
-        state = chosen[0].state
-        encoded = [builder.build(state, example.question) for example in chosen]
+        state, context = chosen[0].state, chosen[0].context
+        encoded = [builder.build(state, example.question, context) for example in chosen]
         temperatures = [
             temperature.temperature(example.question.kind.value, example.option_count)
             for example in chosen

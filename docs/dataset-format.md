@@ -28,6 +28,7 @@ record per line.
 | --- | --- | --- |
 | `id` | yes | Non-empty. Your own bookkeeping: it is not used for dedup, and errors name the line number instead. |
 | `state` | yes | String, object or list. Objects and lists become compact JSON without non-ASCII escapes. |
+| `context` | no | What the answer depends on besides the state: a policy, a rubric, background. String, object or list, serialized like `state`, never empty. See below. |
 | `question.kind` | yes | `choice`, `score` or `noul`. |
 | `question.instruction` | yes | Non-empty. The question text the model reads. |
 | `question.options` | yes | 2 to 255 entries. Names must be unique. |
@@ -39,6 +40,21 @@ record per line.
 | `language` | no | Language variant tag, for provenance. |
 
 `noul` questions must have exactly two options. A blank description is dropped.
+
+## Context
+
+`context` is read before the state, in its own slot with its own budget
+(`--context-budget`, 256 tokens by default). A context over the budget is refused,
+never cut: training checks every record before it loads the model and names the
+first one that does not fit. The state is what gets cut when a sequence runs long,
+so a long trace cannot push the rules it is judged by out of the sequence.
+
+Use it for what the same state is judged against: the same refund request under a
+30-day and a 90-day policy is two records with two contexts and two targets. A
+model only learns to use a context it was trained with, and the most useful
+training data has pairs like that one, where the context changes the answer.
+A record without `context` builds exactly the sequence it built before the field
+existed.
 
 ## Targets are distributions
 

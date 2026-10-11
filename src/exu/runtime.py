@@ -69,27 +69,35 @@ class DecisionRuntime:
         tokenizer = load_tokenizer(path)
         return cls(checkpoint, tokenizer, resolved)
 
-    def decide(self, state: str, question: DecisionQuestion) -> Decision:
-        return self.decide_many([(state, question)])[0]
+    def decide(
+        self, state: str, question: DecisionQuestion, context: str | None = None
+    ) -> Decision:
+        return self.decide_many([(state, question, context)])[0]
 
-    def decide_all(self, state: str, questions: Sequence[DecisionQuestion]) -> list[Decision]:
+    def decide_all(
+        self, state: str, questions: Sequence[DecisionQuestion], context: str | None = None
+    ) -> list[Decision]:
         """Answer several questions about one state, in one forward pass.
 
-        A decoder checkpoint reads the state once for all of them.
+        A decoder checkpoint reads the context and the state once for all of them.
         """
         if not questions:
             raise ValueError("questions cannot be empty")
-        return self.decide_many([(state, question) for question in questions])
+        return self.decide_many([(state, question, context) for question in questions])
 
-    def decide_many(self, pairs: list[tuple[str, DecisionQuestion]]) -> list[Decision]:
+    def decide_many(
+        self,
+        pairs: Sequence[tuple[str, DecisionQuestion] | tuple[str, DecisionQuestion, str | None]],
+    ) -> list[Decision]:
+        """Answer ``(state, question)`` or ``(state, question, context)`` items, in one pass."""
         if not pairs:
             raise ValueError("pairs cannot be empty")
-        encoded = [self.builder.build(state, question) for state, question in pairs]
+        encoded = [self.builder.build(*item) for item in pairs]
         inputs = self.builder.tensors(encoded, self.device)
         temperatures = torch.tensor(
             [
                 self.temperature.temperature(question.kind.value, len(question.options))
-                for _state, question in pairs
+                for _state, question, *_context in pairs
             ],
             dtype=torch.float32,
             device=self.device,
@@ -98,7 +106,7 @@ class DecisionRuntime:
             output = self.model(**inputs, temperature=temperatures)
         return [
             self._decision(question, output.logits[row], output.probabilities[row])
-            for row, (_state, question) in enumerate(pairs)
+            for row, (_state, question, *_context) in enumerate(pairs)
         ]
 
     def _decision(

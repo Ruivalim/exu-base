@@ -9,6 +9,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- An optional `context` per record (string, object or list): what the answer
+  depends on besides the state, such as a policy. Both builders read it before the
+  state, with its own budget, `SequenceConfig.context_budget` and
+  `exu-train --context-budget` (256 tokens), and refuse a context over it instead
+  of cutting it; the state is cut first. Without a context every sequence is the
+  same as before. `DecisionRuntime.decide`, `decide_all` and `decide_many` take a
+  context, and `exu-decide` reads it from a record or from `--context` and
+  `--context-file`.
+- `exu-train` builds every record once before loading the model, so a question or
+  a context over its budget is named by its record id instead of failing mid-epoch.
 - `DecisionRuntime.decide_all(state, questions)`: several questions about one state
   in one forward pass.
 - `exu-decide --input` takes a record with `questions`, a list of questions about
@@ -18,6 +28,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Breaking
 
+- `DecisionBuilder.build` takes an optional `context`; a builder written against
+  the protocol needs the parameter.
 - `EncodedOptions` has a required `prefix_length`, the leading tokens its sequences
   share, and refuses sequences that do not share it. `DecoderSequenceBuilder.tensors`
   emits `prefix_lengths`.

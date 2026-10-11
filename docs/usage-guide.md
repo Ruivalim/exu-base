@@ -50,6 +50,10 @@ Rules that matter, with the full list in [dataset-format.md](dataset-format.md):
   yourself with this architecture.
 - Write the option `description` by hand. It is what the model actually reads when
   deciding, and it is usually where the accuracy comes from.
+- `context` is optional: what the answer depends on besides the state, such as the
+  policy the case is judged by. It is read before the state, with its own budget,
+  `--context-budget` (256 tokens), and a context over it is refused, never cut. The
+  model learns to use a context only from records where it changes the target.
 
 To convert an existing dataset, build `TrainingExample` objects straight from
 records, or with `DecisionQuestion`:
@@ -131,8 +135,9 @@ uv run exu-train \
 - A vision-language base such as `Qwen/Qwen3.5-0.8B` works: the head reads the
   sizes from its `text_config`, and the vision tower is loaded but never fed. Its
   0.8B did not fit on a 12 GB card, which ran out of memory at the AdamW state.
-- `--header-budget` is the room for everything but the state in one sequence. A
-  question whose longest option does not fit raises instead of being cut.
+- `--header-budget` is the room for everything but the context and the state in
+  one sequence. A question whose longest option does not fit raises instead of
+  being cut.
 - Options never see each other, so the answer cannot depend on their order:
   `--option-shuffle` changes nothing and `stability` is 1.0 by construction.
 - `--scorer marker-cls` does not apply and is refused.
@@ -175,7 +180,10 @@ Useful knobs, with their defaults: `--epochs 4`, `--batch-size 8`,
 `--grad-accum 1`, `--seed 17`, `--encoder-lr 2.5e-5` (`1e-5` with
 `--backbone decoder`), `--head-lr 1e-4`, `--weight-decay 0.01`,
 `--max-grad-norm 1.0`, `--max-length 512`, `--header-budget 192` (or
-`--max-length`, if smaller), `--calibration-min-samples 64`, `--log-every 0`.
+`--max-length`, if smaller), `--context-budget 256`, `--calibration-min-samples 64`,
+`--log-every 0`. Before it loads the model, training builds every record once, so a
+question or a context that does not fit its budget is named by its record id
+instead of failing in the middle of an epoch.
 `--grad-checkpointing` is off by default.
 
 `--lr-schedule cosine` decays both learning rates towards zero over the run;
@@ -303,6 +311,9 @@ decision = runtime.decide(
 print(decision.label, decision.probabilities, decision.confidence, decision.should_act)
 ```
 
+- Every entry point takes a context: `runtime.decide(state, question, context)`,
+  `runtime.decide_all(state, questions, context)`, and `(state, question, context)`
+  items in `decide_many`.
 - `runtime.decide_all(state, [question, ...])` answers several questions about one
   state in one forward pass, and `runtime.decide_many([(state, question), ...])`
   any mix of states. Prefer either over a loop: the batch is far faster per
@@ -330,7 +341,7 @@ exu-decide --checkpoint artifacts/exu \
 `--option NAME[=DESCRIPTION]` repeats, and only the first `=` separates the two.
 `--kind score` takes `--level TEXT`, lowest first, and `--kind noul` answers `No` or
 `Yes` unless `--false-option` and `--true-option` say otherwise. `--state-file`
-reads the state from a file.
+reads the state from a file, and `--context` or `--context-file` adds a context.
 
 Many questions, one JSON record per line, from a file or from stdin with `-`:
 
@@ -339,8 +350,8 @@ exu-decide --checkpoint artifacts/exu --input questions.jsonl --output decisions
 ```
 
 A record needs `state` and `question`, in the dataset format. `id` is echoed when
-it is there and everything else is ignored, so a dataset file works as it is. A
-record can carry `questions` instead, a list of questions about its one state:
+it is there, `context` is read like the dataset's, and everything else is ignored,
+so a dataset file works as it is. A record can carry `questions` instead, a list of questions about its one state:
 
 ```json
 {"id": "ticket-7", "state": "I was charged twice for the same invoice.",
@@ -384,6 +395,7 @@ device/precision rules are in [checkpoints.md](checkpoints.md).
 | --- | --- |
 | `too many options for configured header_budget` | The question's options cannot fit the header. With the defaults, roughly 30 options is the ceiling. Raise `--header-budget` (and `--max-length` with it), or decide in two stages. |
 | `tokenizer must provide mask_token_id` | The encoder is decoder-only or has no mask token. Pick a bidirectional encoder that has one, or train it with `--backbone decoder`. |
+| `context takes N tokens, more than the configured context_budget` | The record's context does not fit. Raise `--context-budget` (and `--max-length` with it), or shorten the context: it is never cut. |
 | `question takes N tokens without the state` | Decoder only: the instruction plus the longest option does not fit `--header-budget`. Raise it, with `--max-length`, or shorten the option texts. |
 | `each target distribution must sum to one` | Fix the `target` in the record named in the error. |
 | `output path already exists` | `--output` refuses to overwrite. Choose a new directory. |

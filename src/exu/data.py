@@ -5,6 +5,7 @@ One JSONL record is one fully specified typed decision::
     {
       "id": "uuid or short key",
       "state": "text" | {"any": "json"} | ["any", "json"],
+      "context": "text" | {"any": "json"} | ["any", "json"],   (optional)
       "question": {
         "kind": "choice" | "score" | "noul",
         "instruction": "what to decide",
@@ -15,6 +16,9 @@ One JSONL record is one fully specified typed decision::
       "family": "routing",
       "language": "en"
     }
+
+The optional context is what the answer depends on besides the state: a policy,
+a rubric, background. The model reads it before the state.
 
 The target is a distribution, not a label. Soft targets let several annotators
 or a teacher model express disagreement, which is exactly the signal a
@@ -49,10 +53,13 @@ class TrainingExample:
     split: str | None = None
     family: str | None = None
     language: str | None = None
+    context: str | None = None
 
     def __post_init__(self) -> None:
         if not self.example_id.strip():
             raise ValueError("example id cannot be empty")
+        if self.context is not None and not self.context.strip():
+            raise ValueError("context cannot be empty")
         if len(self.target) != len(self.question.options):
             raise ValueError("target length must equal option count")
         if any(not math.isfinite(value) or value < 0 for value in self.target):
@@ -82,6 +89,7 @@ class TrainingExample:
                 _optional_string(record.get("split")),
                 _optional_string(record.get("family")),
                 _optional_string(record.get("language")),
+                context_text(record.get("context")),
             )
         except KeyError as error:
             raise ValueError(f"record missing required field {error.args[0]!r}") from error
@@ -89,7 +97,7 @@ class TrainingExample:
             raise ValueError(f"invalid training record: {error}") from error
 
     def to_record(self) -> dict[str, Any]:
-        return {
+        record = {
             "id": self.example_id,
             "state": _parse_state(self.state),
             "question": {
@@ -105,6 +113,9 @@ class TrainingExample:
             "family": self.family,
             "language": self.language,
         }
+        if self.context is not None:
+            record["context"] = _parse_state(self.context)
+        return record
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,7 +179,10 @@ class DecisionDataset(Dataset[TrainingExample]):
     def collate(self, examples: Sequence[TrainingExample]) -> TrainingBatch:
         if not examples:
             raise ValueError("cannot collate an empty batch")
-        encoded = [self.builder.build(example.state, example.question) for example in examples]
+        encoded = [
+            self.builder.build(example.state, example.question, example.context)
+            for example in examples
+        ]
         option_count = max(example.option_count for example in examples)
         targets = torch.zeros((len(examples), option_count), dtype=torch.float32)
         for index, example in enumerate(examples):
@@ -208,6 +222,20 @@ def question_from_record(raw: Any) -> DecisionQuestion:
 def state_text(value: Any) -> str:
     """The text the model reads for a state given as a string, an object or a list."""
     return _serialize_state(value)
+
+
+def context_text(value: Any) -> str | None:
+    """The text the model reads for a context, serialized like a state. ``None`` is none."""
+    if value is None:
+        return None
+    if isinstance(value, (Mapping, list)) and not value:
+        raise ValueError("context cannot be empty")
+    try:
+        return _serialize_state(value)
+    except ValueError as error:
+        raise ValueError(str(error).replace("state", "context")) from error
+    except TypeError as error:
+        raise TypeError(str(error).replace("state", "context")) from error
 
 
 def load_jsonl(path: str | Path, split: str | None = None) -> list[TrainingExample]:
