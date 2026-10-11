@@ -213,6 +213,33 @@ def test_training_layer_by_layer_gives_the_full_gradients(name, checkpointed) ->
     assert calls["first_layer"] == (forward * 2 if checkpointed else forward)
 
 
+@pytest.mark.parametrize("name", sorted(BACKBONES))
+def test_contexts_train_layer_by_layer_with_the_full_gradients(name) -> None:
+    # Two contexts over shared and distinct states: prefixes of several lengths,
+    # where one context and one state group and the others do not.
+    model, builder = _model(name)
+    model.train()
+    model.backbone.gradient_checkpointing_enable({"use_reentrant": False})
+    question = DecisionQuestion.choice(
+        "where should this go", [Option("billing"), Option("refund"), Option("support")]
+    )
+    items = [
+        ("card was charged", "refund only within thirty days"),
+        ("card refund", "refund only within thirty days"),
+        ("card was charged", "always refund"),
+        ("card was charged", "refund only within thirty days"),
+    ]
+    batch = builder.tensors([builder.build(state, question, context) for state, context in items])
+    full_batch = {key: value for key, value in batch.items() if key != "prefix_lengths"}
+
+    shared, calls = _train_step(model, batch)
+    full, _ = _train_step(model, full_batch)
+
+    _assert_same_gradients(shared, full)
+    # Three distinct prefixes in the batch, each run once per layer pass.
+    assert calls["first_layer"][0] == 3
+
+
 @pytest.mark.parametrize("checkpointed", [False, True])
 def test_no_layer_cache_outlives_its_step(checkpointed) -> None:
     # Each layer's cache holds its states copied once per tail. One kept alive by a
