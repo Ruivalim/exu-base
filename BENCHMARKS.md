@@ -1427,6 +1427,25 @@ test questions no answer changed, the probabilities moved by at most 0.0006 and 
 score in the table stayed the same to the fourth decimal. The Qwen3-0.6B row was not
 timed again.
 
+Training shares the prefix as well, running the layers one by one (prefixes, then the
+tails on a cache of that layer, each step checkpointed). Measured on Qwen3.5-2B with
+LoRA r16, `--grad-checkpointing`, one epoch over 320 training questions on one RTX
+3060, the training loop alone (no loading, merge or evaluation):
+
+| States | Recipe | Batch | Time | Peak |
+| --- | --- | --- | --- | --- |
+| this dataset's, about 90 tokens | K full sequences | 4 x 4 | 100 s | 6.69 GB |
+| this dataset's, about 90 tokens | shared prefix, layer by layer | 4 x 4 | 74 s | 6.23 GB |
+| the same plus a 2,000-token history | K full sequences | 4 x 4 | out of memory | |
+| the same plus a 2,000-token history | K full sequences | 1 x 16 | 1,531 s | 9.06 GB |
+| the same plus a 2,000-token history | shared prefix, layer by layer | 4 x 4 | 496 s | 9.51 GB |
+
+The peaks include about 5.5 GB of weights. Validation NLL after the epoch agreed
+within the spread of two runs of the same recipe (1.1583 and 1.1586 layer by layer,
+1.1502 and 1.1578 with full sequences, on the short states). This is one epoch on a
+subset, so it says what training costs, not what it reaches; no full run was trained
+this way.
+
 What this does not show. It is one synthetic dataset with teacher-model gold; the
 higher-lr arms have one seed; the Exu decoder was not run at 4B, and of
 the encoders only ModernBERT-base ran with the cosine schedule. Unsloth's recipe was not tuned
@@ -1456,7 +1475,7 @@ uv run exu-train --mode baseline --backbone decoder --encoder Qwen/Qwen3-0.6B \
   room. Section 10's second stage started at the peak.
 - More epochs, another sigma schedule, another learning rate.
 - A decoder backbone beyond sections 10 and 14: a shorter first stage before RLCD,
-  a prefix shared across the K sequences in training, LoRA beyond section 14, and a remedy for its plateau on balanced two-option questions.
+  a full run trained on the shared prefix, LoRA beyond section 14, and a remedy for its plateau on balanced two-option questions.
 - Whether four jobs sharing one GPU change a result. Runs are seeded and independent,
   and the `marker` baseline matches the one-job-per-GPU number, but no run was
   repeated both ways.

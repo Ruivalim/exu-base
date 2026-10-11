@@ -156,20 +156,116 @@ def test_a_batch_without_prefix_lengths_runs_the_full_sequences() -> None:
     assert len(calls) == 1
 
 
-def test_with_gradients_the_full_sequences_run() -> None:
-    model, builder = _model("qwen3")
+def _layers(model: DecoderDecisionModel):
+    return getattr(model.backbone, "language_model", model.backbone).layers
+
+
+def _train_step(model: DecoderDecisionModel, batch) -> tuple[dict[str, torch.Tensor], dict]:
+    """Gradients of a fixed weighting of the logits, and how the backbone was called."""
+    model.zero_grad()
+    calls = {"backbone": 0, "first_layer": []}
+    hooks = [
+        model.backbone.register_forward_pre_hook(
+            lambda *_: calls.__setitem__("backbone", calls["backbone"] + 1)
+        ),
+        _layers(model)[0].register_forward_pre_hook(
+            lambda _module, args: calls["first_layer"].append(args[0].shape[0])
+        ),
+    ]
+    output = model(**batch)
+    torch.manual_seed(1)
+    weights = torch.randn(output.logits.shape)
+    mask = batch["option_mask"]
+    (output.logits[mask] * weights[mask]).sum().backward()
+    for hook in hooks:
+        hook.remove()
+    grads = {name: p.grad.clone() for name, p in model.named_parameters() if p.grad is not None}
+    return grads, calls
+
+
+def _assert_same_gradients(got: dict[str, torch.Tensor], want: dict[str, torch.Tensor]) -> None:
+    assert got.keys() == want.keys()
+    scale = max(grad.abs().max() for grad in want.values())
+    for key, grad in want.items():
+        assert torch.allclose(got[key], grad, atol=1e-5 * scale), key
+
+
+@pytest.mark.parametrize("checkpointed", [False, True])
+@pytest.mark.parametrize("name", sorted(BACKBONES))
+def test_training_layer_by_layer_gives_the_full_gradients(name, checkpointed) -> None:
+    model, builder = _model(name)
     model.train()
-    calls: list[int] = []
-    hook = model.backbone.register_forward_pre_hook(lambda *_: calls.append(1))
+    if checkpointed:
+        model.backbone.gradient_checkpointing_enable({"use_reentrant": False})
+    batch = _batch(builder)
+    full_batch = {key: value for key, value in batch.items() if key != "prefix_lengths"}
 
-    model(**_batch(builder))
-    hook.remove()
+    shared, calls = _train_step(model, batch)
+    full, _ = _train_step(model, full_batch)
 
-    assert len(calls) == 1
+    _assert_same_gradients(shared, full)
+    # The backbone's own forward never runs: its layers do, prefixes then tails.
+    assert calls["backbone"] == 0
+    prefixes = len(set(batch["prefix_lengths"].tolist()))
+    sequences = batch["input_ids"].size(0)
+    forward = [prefixes, sequences]
+    # A checkpointed step runs again in the backward pass; an unchecked one does not.
+    assert calls["first_layer"] == (forward * 2 if checkpointed else forward)
 
 
-def test_a_checkpointing_backbone_in_training_mode_runs_the_full_sequences() -> None:
-    # Such a backbone drops the cache it is given: sharing would read tails alone.
+@pytest.mark.parametrize("checkpointed", [False, True])
+def test_no_layer_cache_outlives_its_step(checkpointed) -> None:
+    # Each layer's cache holds its states copied once per tail. One kept alive by a
+    # reference cycle waits for the garbage collector, and on a real base the
+    # caches of every layer pile up in memory.
+    import gc
+
+    from transformers.cache_utils import CacheLayerMixin, LinearAttentionCacheLayerMixin
+
+    layer_types = (CacheLayerMixin, LinearAttentionCacheLayerMixin)
+
+    model, builder = _model("qwen3.5")
+    model.train()
+    if checkpointed:
+        model.backbone.gradient_checkpointing_enable({"use_reentrant": False})
+    batch = _batch(builder)
+    gc.collect()
+    gc.disable()
+    try:
+        _train_step(model, batch)
+        cached = [
+            obj for obj in gc.get_objects() if type(obj).__module__ == layer_types[0].__module__
+        ]
+        alive = [obj for obj in cached if isinstance(obj, layer_types)]
+    finally:
+        gc.enable()
+
+    assert alive == []
+
+
+def test_every_distinct_prefix_of_a_batch_runs_in_one_call_per_layer() -> None:
+    model, builder = _model("qwen3.5")
+    model.train()
+    state = "card was charged twice for one invoice"
+    questions = [
+        DecisionQuestion.choice("where should this go", [Option("billing"), Option("support")]),
+        DecisionQuestion.noul("is this a refund"),
+    ]
+    pairs = [(state, question) for question in questions] + [("card refund", questions[0])]
+    batch = builder.tensors([builder.build(s, q) for s, q in pairs])
+    full_batch = {key: value for key, value in batch.items() if key != "prefix_lengths"}
+
+    shared, calls = _train_step(model, batch)
+    full, _ = _train_step(model, full_batch)
+
+    _assert_same_gradients(shared, full)
+    # Two distinct states, so two prefixes in one call, then the 6 tails in another.
+    assert calls["first_layer"] == [2, 6]
+
+
+def test_a_checkpointing_backbone_in_training_mode_answers_like_the_full_sequences() -> None:
+    # Such a backbone drops any cache it is given: the layer-by-layer path is the one
+    # that still reads each tail on its prefix.
     model, builder = _model("qwen3")
     model.train()
     model.backbone.gradient_checkpointing_enable({"use_reentrant": False})
@@ -178,8 +274,40 @@ def test_a_checkpointing_backbone_in_training_mode_runs_the_full_sequences() -> 
     shapes, output = _backbone_calls(model, batch)
     full = _full(model, batch)
 
-    assert len(shapes) == 1
-    assert torch.equal(output.logits, full.logits)
+    assert shapes == []
+    mask = batch["option_mask"]
+    assert torch.allclose(output.logits[mask], full.logits[mask], atol=1e-5)
+
+
+def _tiny_llama(vocab_size: int):
+    from transformers import LlamaConfig, LlamaModel
+
+    return LlamaModel(
+        LlamaConfig(
+            vocab_size=vocab_size,
+            hidden_size=32,
+            intermediate_size=64,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=1,
+            max_position_embeddings=512,
+        )
+    )
+
+
+def test_a_backbone_the_layer_path_does_not_know_trains_on_the_full_sequences() -> None:
+    torch.manual_seed(0)
+    tokenizer = tiny_decoder_tokenizer()
+    model = DecoderDecisionModel(
+        _tiny_llama(len(tokenizer)), ExuConfig(encoder_name="tiny", backbone="decoder")
+    ).train()
+    builder = DecoderSequenceBuilder(tokenizer, SequenceConfig(max_length=128, header_budget=96))
+    batch = _batch(builder)
+
+    _, calls = _train_step(model, batch)
+
+    assert calls["backbone"] == 1
+    assert calls["first_layer"] == [batch["input_ids"].size(0)]
 
 
 @pytest.mark.parametrize(

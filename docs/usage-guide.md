@@ -125,10 +125,16 @@ uv run exu-train \
 
 - One epoch at `--encoder-lr 1e-5` (the default with this backbone) is where the
   runs in `BENCHMARKS.md` peaked; more epochs at a constant rate made them worse.
-- Cost: K sequences for a question with K options in training. At inference the
-  state runs once for every question about it and each option adds a short tail:
-  on Qwen3.5-2B that took a case of five questions from 1,024 ms to 439 ms on a
-  3060, with the same answers. The GoEmotions run (28 options) took an hour per epoch on an RTX 5090.
+- Cost: the state runs once for every question about it and each option adds a
+  short tail, in training and at inference. At inference that took a case of five
+  questions on Qwen3.5-2B from 1,024 ms to 439 ms on a 3060, with the same answers.
+  Training runs the backbone layer by layer, with `--grad-checkpointing`
+  checkpointing each layer; with LoRA on Qwen3.5-2B on a 3060 it trained 320
+  questions in 74 s against 100 s for the K full sequences, and with 2,000-token
+  states in 496 s at batch 4, where the full sequences ran out of memory at batch 4
+  and took 1,531 s at batch 1. Only Qwen3 and Qwen3.5 backbones train this way; any
+  other decoder trains on the K full sequences. The GoEmotions run (28 options),
+  before any of this, took an hour per epoch on an RTX 5090.
 - Memory: the 0.6B model was trained on 12 GB cards with `--grad-checkpointing`
   and `--batch-size 4 --grad-accum 4`. 8 GB was not tried; weights, gradients and
   AdamW state alone come to about 9.6 GB by arithmetic.

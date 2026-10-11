@@ -23,12 +23,19 @@ Two properties follow from the layout:
 
 - Options never see each other, so the answer cannot depend on option order. A
   permutation of the options permutes the distribution, exactly.
-- The cost is K sequences per question in training. Without gradients (evaluation,
-  calibration, the runtime) each distinct prefix runs once, so the questions about
-  one state share one run of it, and the tails run on its cache. Under causal
-  attention that is the same computation; on Qwen3.5-2B the probabilities moved by
-  at most 0.0006 over 2,000 questions, from where the linear-attention kernels cut
-  their chunks, and no answer changed.
+- Each distinct prefix (the lead and the state) runs once, and every option runs as
+  a short tail on it, so the questions about one state share one run of the state.
+  Under causal attention that is the computation of the K full sequences. Without
+  gradients (evaluation, calibration, the runtime) the tails run on the backbone's
+  own cache; on Qwen3.5-2B the probabilities moved by at most 0.0006 over 2,000
+  questions, from where the linear-attention kernels cut their chunks, and no
+  answer changed.
+- Training runs the backbone layer by layer: each layer runs the prefixes, then the
+  tails on a cache of that one layer, inside one checkpointed step when the
+  backbone has gradient checkpointing on. The transformers cache cannot do that
+  itself, since its checkpointed layers drop any cache they are given. This path
+  knows the layer stack of Qwen3 and Qwen3.5 only; any other backbone trains on the
+  K full sequences.
 
 The question part of a sequence (everything but the context and the state) has to
 fit ``header_budget``, and the optional context has to fit ``context_budget``;
@@ -45,13 +52,16 @@ model and give the same answers. See ``docs/checkpoints.md``.
 
 from __future__ import annotations
 
+import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 import torch
 from torch import Tensor, nn
-from transformers import AutoModel
+from torch.utils.checkpoint import checkpoint
+from transformers import AutoModel, DynamicCache
+from transformers.masking_utils import create_causal_mask, create_recurrent_attention_mask
 
 from .model import (
     DEFAULT_DECODER,
@@ -257,14 +267,27 @@ class DecoderDecisionModel(nn.Module):
     ) -> DecisionOutput:
         """Score a batch emitted by :meth:`DecoderSequenceBuilder.tensors`.
 
-        Without gradients and with ``prefix_lengths``, each distinct prefix runs
-        once and the tails of every question that shares it run on its cache. With
-        gradients, or on a backbone in training mode with gradient checkpointing
-        (which drops any cache it is given), the K full sequences run.
+        With ``prefix_lengths``, each distinct prefix runs once and the tails of
+        every question that shares it run on it. Without gradients the tails run on
+        the backbone's cache. With gradients, or on a backbone in training mode with
+        gradient checkpointing (which drops any cache it is given), a Qwen3 or
+        Qwen3.5 backbone runs layer by layer and any other one runs the K full
+        sequences, as a batch without ``prefix_lengths`` does.
         """
-        if prefix_lengths is not None and self._can_share_prefix():
+        checkpointing = bool(getattr(self.backbone, "is_gradient_checkpointing", False))
+        cacheless = torch.is_grad_enabled() or (self.backbone.training and checkpointing)
+        if prefix_lengths is not None and not cacheless:
             read = self._read_shared(
                 input_ids, attention_mask, read_positions, sequence_rows, prefix_lengths
+            )
+        elif prefix_lengths is not None and _layer_stack(self.backbone) is not None:
+            read = _read_layerwise(
+                self.backbone,
+                input_ids,
+                read_positions,
+                sequence_rows,
+                prefix_lengths,
+                checkpointed=checkpointing and self.backbone.training,
             )
         else:
             hidden = self.backbone(
@@ -289,15 +312,6 @@ class DecoderDecisionModel(nn.Module):
         action_logits = self.action_head(torch.cat((pooled, features.detach().float()), dim=-1))
         return DecisionOutput(masked_logits, probabilities, action_logits)
 
-    def _can_share_prefix(self) -> bool:
-        # Training runs the full sequences: without gradient checkpointing, which
-        # drops the cache, the shared prefix needed more memory than K checkpointed
-        # sequences and ran slower on Qwen3.5-2B.
-        if torch.is_grad_enabled():
-            return False
-        checkpointing = getattr(self.backbone, "is_gradient_checkpointing", False)
-        return not (self.backbone.training and checkpointing)
-
     def _read_shared(
         self,
         input_ids: Tensor,
@@ -315,14 +329,7 @@ class DecoderDecisionModel(nn.Module):
         linear-attention state of a hybrid base such as Qwen3.5 is carried as well
         as the keys and values of its attention layers.
         """
-        groups: dict[tuple[int, ...], list[int]] = {}
-        for row, length in enumerate(prefix_lengths.tolist()):
-            members = (sequence_rows == row).nonzero(as_tuple=True)[0]
-            if members.numel():
-                key = tuple(input_ids[members[0], :length].tolist())
-                groups.setdefault(key, []).extend(members.tolist())
-        if not groups:
-            raise ValueError("cannot score an empty batch")
+        groups = _prefix_groups(input_ids, sequence_rows, prefix_lengths)
         read = None
         for prefix, sequences in groups.items():
             members = torch.tensor(sequences, dtype=torch.long, device=input_ids.device)
@@ -343,3 +350,170 @@ class DecoderDecisionModel(nn.Module):
                 read = reads.new_empty((input_ids.size(0), reads.size(-1)))
             read[members] = reads
         return read
+
+
+def _prefix_groups(
+    input_ids: Tensor, sequence_rows: Tensor, prefix_lengths: Tensor
+) -> dict[tuple[int, ...], list[int]]:
+    """The sequences of a batch keyed by their prefix tokens, in order of first use."""
+    groups: dict[tuple[int, ...], list[int]] = {}
+    for row, length in enumerate(prefix_lengths.tolist()):
+        members = (sequence_rows == row).nonzero(as_tuple=True)[0]
+        if members.numel():
+            key = tuple(input_ids[members[0], :length].tolist())
+            groups.setdefault(key, []).extend(members.tolist())
+    if not groups:
+        raise ValueError("cannot score an empty batch")
+    return groups
+
+
+# The text models whose layer stack _read_layerwise drives. It calls their own
+# embedding, rotary embedding, mask functions, layers and final norm, in the order
+# their forward does, and only knows these two.
+_LAYERWISE_MODELS = ("Qwen3Model", "Qwen3_5TextModel")
+_LAYERWISE_KINDS = ("full_attention", "linear_attention")
+
+
+def _layer_stack(backbone: nn.Module) -> nn.Module | None:
+    """The text model to run layer by layer, or None when this path does not know it."""
+    text = getattr(backbone, "language_model", backbone)
+    if type(text).__name__ not in _LAYERWISE_MODELS:
+        return None
+    if any(kind not in _LAYERWISE_KINDS for kind in text.config.layer_types):
+        return None
+    return text
+
+
+def _read_layerwise(
+    backbone: nn.Module,
+    input_ids: Tensor,
+    read_positions: Tensor,
+    sequence_rows: Tensor,
+    prefix_lengths: Tensor,
+    checkpointed: bool,
+) -> Tensor:
+    """The read of every sequence, running each distinct prefix once, layer by layer.
+
+    All the prefixes of the batch run in one call per layer, padded on the left so
+    each ends where its tails start, and all the tails in a second call, padded on
+    the right, on a cache of that one layer copied once per tail. Left padding
+    keeps a linear-attention state at zero until the prefix starts. The cache is
+    created inside the step, so a checkpointed step recomputes the same thing.
+    """
+    text = _layer_stack(backbone)
+    config = text.config
+    device = input_ids.device
+    groups = _prefix_groups(input_ids, sequence_rows, prefix_lengths)
+    prefixes = list(groups)
+    width = max(len(prefix) for prefix in prefixes)
+    prefix_ids = input_ids.new_zeros((len(prefixes), width))
+    prefix_mask = input_ids.new_zeros((len(prefixes), width))
+    for index, prefix in enumerate(prefixes):
+        prefix_ids[index, width - len(prefix) :] = torch.tensor(prefix, device=device)
+        prefix_mask[index, width - len(prefix) :] = 1
+    members = [member for prefix in prefixes for member in groups[prefix]]
+    owner = [index for index, prefix in enumerate(prefixes) for _ in groups[prefix]]
+    starts = torch.tensor([len(prefixes[index]) for index in owner], device=device)
+    order = torch.tensor(members, device=device)
+    group = torch.tensor(owner, device=device)
+    local = read_positions[order] - starts
+    columns = torch.arange(int(local.max()) + 1, device=device)
+    gather = (starts[:, None] + columns).clamp_max(input_ids.size(1) - 1)
+    tail_ids = input_ids[order[:, None], gather]
+    tail_mask = (columns <= local[:, None]).long()
+    kv_mask = torch.cat((prefix_mask[group], tail_mask), dim=1)
+
+    lengths = prefix_mask.sum(dim=1)
+    offsets = torch.arange(width, device=device) - (width - lengths)[:, None]
+    prefix_text, prefix_rope = _positions(text, offsets.clamp_min(0))
+    tail_text, tail_rope = _positions(text, starts[:, None] + columns)
+    prefix_hidden = text.embed_tokens(prefix_ids)
+    tail_hidden = text.embed_tokens(tail_ids)
+    prefix_rotary = text.rotary_emb(prefix_hidden, prefix_rope)
+    tail_rotary = text.rotary_emb(tail_hidden, tail_rope)
+
+    def step(index: int, prefix_hidden: Tensor, tail_hidden: Tensor) -> tuple[Tensor, Tensor]:
+        layer = text.layers[index]
+        recurrent = config.layer_types[index] == "linear_attention"
+        cache = DynamicCache(config=config)
+
+        def mask(hidden: Tensor, padding: Tensor, positions: Tensor) -> Tensor | None:
+            if recurrent:
+                return create_recurrent_attention_mask(config, hidden, padding, cache)
+            return create_causal_mask(
+                config, hidden, padding, cache, position_ids=positions, layer_idx=index
+            )
+
+        # nn.Module.__call__ skips the checkpointing wrapper of a transformers
+        # layer, which would drop the cache; this step is the checkpointed unit.
+        prefix_hidden = nn.Module.__call__(
+            layer,
+            prefix_hidden,
+            attention_mask=mask(prefix_hidden, prefix_mask, prefix_text),
+            position_ids=prefix_text,
+            past_key_values=cache,
+            use_cache=True,
+            position_embeddings=prefix_rotary,
+        )
+        cache.reorder_cache(group)
+        _assign_recurrent_states(cache)
+        tail_hidden = nn.Module.__call__(
+            layer,
+            tail_hidden,
+            attention_mask=mask(tail_hidden, kv_mask, tail_text),
+            position_ids=tail_text,
+            past_key_values=cache,
+            use_cache=True,
+            position_embeddings=tail_rotary,
+        )
+        return prefix_hidden, tail_hidden
+
+    for index in range(config.num_hidden_layers):
+        if checkpointed:
+            prefix_hidden, tail_hidden = checkpoint(
+                step, index, prefix_hidden, tail_hidden, use_reentrant=False
+            )
+        else:
+            prefix_hidden, tail_hidden = step(index, prefix_hidden, tail_hidden)
+    hidden = text.norm(tail_hidden)
+    reads = hidden[torch.arange(hidden.size(0), device=device), local].float()
+    read = reads.new_empty((input_ids.size(0), reads.size(-1)))
+    read[order] = reads
+    return read
+
+
+def _positions(text: nn.Module, positions: Tensor) -> tuple[Tensor, Tensor]:
+    """Text positions as the layers take them, and as the rotary embedding takes them.
+
+    Qwen3.5 rotates text with four rows of positions (text, then time, height and
+    width, all equal for text) and hands the layers the first; Qwen3 uses one.
+    """
+    if type(text).__name__ == "Qwen3_5TextModel":
+        rows = positions[None].expand(4, *positions.shape)
+        return rows[0], rows[1:]
+    return positions, positions
+
+
+def _assign_recurrent_states(cache: object) -> None:
+    """Make the linear-attention layers of ``cache`` replace their state, not copy into it.
+
+    A linear-attention layer (Qwen3.5's) reads its recurrent state and then copies
+    the new one into the same tensor. The backward pass of the tails needs the
+    state they started from, so that in-place copy breaks it. The tails never read
+    the state they leave behind, so replacing the reference is enough.
+
+    The replacement holds its layer weakly: a strong reference from the layer to
+    itself is a cycle, and every layer's cache, with its states copied once per
+    tail, would then wait for the garbage collector instead of going at the end of
+    its step.
+    """
+    for layer in getattr(cache, "layers", ()):
+        if not hasattr(layer, "recurrent_states"):
+            continue
+        owner = weakref.ref(layer)
+
+        def update(recurrent_states: Tensor, state_idx: int = 0, _owner=owner, **_: object):
+            _owner().recurrent_states[state_idx] = recurrent_states
+            return recurrent_states
+
+        layer.update_recurrent_state = update

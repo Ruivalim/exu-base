@@ -38,9 +38,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Without gradients the decoder runs each distinct prefix once and every option as a
   short tail on its cache, so the questions about one state read it once. Evaluation,
-  calibration, `exu-decide` and `DecisionRuntime` get it with no flag; training still
-  runs the K full sequences. On Qwen3.5-2B a case of five questions went from 1,024 ms
-  to 439 ms on an RTX 3060 with the same answers (probabilities within 0.0006).
+  calibration, `exu-decide` and `DecisionRuntime` get it with no flag. On Qwen3.5-2B a
+  case of five questions went from 1,024 ms to 439 ms on an RTX 3060 with the same
+  answers (probabilities within 0.0006).
+- A Qwen3 or Qwen3.5 decoder trains on the shared prefix too, running its layers one
+  by one, each on the prefixes and then on the tails over a cache of that layer;
+  `--grad-checkpointing` checkpoints each such step. The gradients are those of the
+  K full sequences. With LoRA on Qwen3.5-2B on an RTX 3060, 320 questions trained in
+  74 s against 100 s, and with 2,000-token states in 496 s at batch 4, where the full
+  sequences ran out of memory at batch 4 and took 1,531 s at batch 1. Other decoder
+  families still train on the K full sequences.
 
 ## [0.3.0] - 2026-10-11
 

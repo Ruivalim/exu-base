@@ -183,9 +183,9 @@ brings confidence in line with accuracy.
 That is the default, a bidirectional encoder. `--backbone decoder` is an
 experimental second architecture for causal models such as Qwen3: one sequence
 per option (`state, question, candidate`), read at its last token, with the same
-reward, calibration and evaluation after the logits. It trains on K sequences
-for a question with K options; at inference the state runs once for all the
-questions about it, and each option adds a short tail. Measured with Qwen3-0.6B, it has the best NLL on
+reward, calibration and evaluation after the logits. The state runs once for all
+the questions about it and each option adds a short tail, at inference and, on
+Qwen3 and Qwen3.5, in training too. Measured with Qwen3-0.6B, it has the best NLL on
 GoEmotions and on ChaosNLI, and it learned balanced NLI on every seed, where the
 encoder needs `--scorer marker-cls`. It is not immune to the uniform-guess
 plateau: on balanced BoolQ two seeds in three stayed at `log 2`. The numbers are
