@@ -211,7 +211,7 @@ Working: typed-decision contract, token-budgeted sequence builder with marker
 injection defense, direct and RLCD training, temperature calibration,
 calibration-aware evaluation, portable checkpoint, offline inference runtime.
 
-Not done: a published checkpoint, a human-annotated calibration set, learned
+Not done: a human-annotated calibration set, learned
 act-or-escalate training (the cost-based baseline is in place), and a multi-turn
 prefix objective.
 
@@ -220,11 +220,15 @@ Small synthetic fixtures are for plumbing only. They are not evidence of quality
 Every run on real data so far, with datasets, encoders, seeds and the results that
 did not go RLCD's way, is in
 [BENCHMARKS.md](https://github.com/ruivalim/exu-base/blob/main/BENCHMARKS.md).
-One model from those runs is published as an example,
-[exu-qwen3-0.6b-goemotions](https://huggingface.co/Ruivalim/exu-qwen3-0.6b-goemotions):
-a Qwen3-0.6B body with a decision head, trained with the direct objective on
-GoEmotions. It comes with its own one-file runtime and a card that says what it is
-and is not; this package does not load that format yet.
+Two models from those runs are published as examples, each with a card that says
+what it is and is not.
+[exu-qwen3.5-2b-typed-decisions](https://huggingface.co/Ruivalim/exu-qwen3.5-2b-typed-decisions)
+is the decoder backbone on Qwen3.5-2B with rank-16 adapters, trained on the
+synthetic agent traces of `typed-decisions` (section 14), and loads with
+`DecisionRuntime.load`.
+[exu-qwen3-0.6b-goemotions](https://huggingface.co/Ruivalim/exu-qwen3-0.6b-goemotions)
+is a Qwen3-0.6B body with a decision head trained on GoEmotions; it comes with its
+own one-file runtime, and this package does not load that format.
 
 ## Prior art
 
