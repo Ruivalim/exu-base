@@ -18,8 +18,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - `exu-train --lr-schedule {constant,cosine}` and `--warmup-steps N`.
 - `exu-train --lora-rank R` and `--lora-alpha A`: low-rank adapters on every linear
-  layer of a frozen backbone, merged into the weights before saving, so the
-  checkpoint format is unchanged. `exu.lora` exposes `LoRALinear`, `apply_lora` and
+  layer of a frozen backbone, merged into the weights after training and before
+  calibration, so the checkpoint format is unchanged. On a GPU the frozen weights
+  are kept in the autocast dtype, which fits Qwen3.5-2B on a 12 GB card. `exu.lora` exposes `LoRALinear`, `apply_lora` and
   `merge_lora`.
 
 ### Fixed
