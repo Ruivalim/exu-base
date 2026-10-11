@@ -197,7 +197,8 @@ atualização que parte do zero pede uma taxa maior que um fine-tune completo. G
 bem menos memória que um fine-tune completo: não há estado do otimizador para os pesos
 congelados, e na GPU esses pesos ficam no dtype do autocast, o que não muda resultado
 nenhum porque o autocast já calcula nele. É isso que faz o Qwen3.5-2B caber numa placa
-de 12 GB. A atualização é somada aos pesos depois do treino, antes da calibração e de
+de 12 GB. No `typed-decisions` os adaptadores levaram o decoder em Qwen3.5-2B a KL
+0.075, contra 0.082 com fine-tune completo (seção 14 do `BENCHMARKS.md`). A atualização é somada aos pesos depois do treino, antes da calibração e de
 salvar, então o checkpoint é igual ao de um treino sem
 adaptadores, e o `exu-evaluate` e o `exu-decide` não precisam de nada novo.
 

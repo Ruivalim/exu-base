@@ -5,7 +5,7 @@ a published result of someone else, and nothing is tuned to look good: the proje
 is pre-alpha, the runs are small, and several of them say the toolkit's headline
 method loses to its own baseline.
 
-Last updated 2026-10-10.
+Last updated 2026-10-11.
 
 ## How to read this file
 
@@ -36,7 +36,7 @@ Last updated 2026-10-10.
 | Rented machines, section 11 | 1x NVIDIA A40 48 GB or RTX 3090 24 GB, RunPod secure cloud, one job at a time |
 | Probe machine | 1x NVIDIA RTX 4060 8 GB, shared with a desktop session |
 | Section 13 | GoEmotions on the 2x RTX 3060 12 GB, one job per GPU; Measuring Hate Speech on the RTX 4060, one job at a time (two did not fit in 8 GB) |
-| Section 14 | Exu arms on the 2x RTX 3060 12 GB (one decoder seed on a rented RTX 3090); Exu decoder on Qwen3.5-0.8B on rented RTX PRO 4500, A40, RTX A6000 and RTX 4090 pods, one run per pod, and on Qwen3.5-2B on A40 or RTX A6000 pods; Exu decoder with LoRA on the 2x RTX 3060; Unsloth 0.8B on the RTX 4060, 2B and 4B on a rented RTX 3090 (seed 3407) and RTX 4090 (seeds 17, 23); Clef on a rented GPU; latency on the RTX 4060 |
+| Section 14 | Exu arms on the 2x RTX 3060 12 GB (one decoder seed on a rented RTX 3090); Exu decoder on Qwen3.5-0.8B on rented RTX PRO 4500, A40, RTX A6000 and RTX 4090 pods, one run per pod, and on Qwen3.5-2B on A40 or RTX A6000 pods; Exu decoder with LoRA on the 2x RTX 3060 (0.8B and 2B); Unsloth 0.8B on the RTX 4060, 2B and 4B on a rented RTX 3090 (seed 3407) and RTX 4090 (seeds 17, 23); Clef on a rented GPU; latency on the RTX 4060 |
 | Precision | bfloat16 autocast, log term of the reward always in float32 |
 | Main encoder | `google-bert/bert-base-uncased` |
 | Other encoders tried | `answerdotai/ModernBERT-base` |
@@ -1261,7 +1261,7 @@ this table.
   fit on 12 GB). Both decoders ran again with `--lr-schedule cosine
   --warmup-steps 10`, the schedule and warm-up of Unsloth's recipe, at encoder lr
   `1e-5` and at `5e-5`, and `Qwen/Qwen3.5-2B` ran at `1e-5` with the cosine
-  schedule only. Qwen3.5-0.8B ran a third way, with `--lora-rank 16` (alpha 16, lr
+  schedule only. Qwen3.5-0.8B and 2B also ran with `--lora-rank 16` (alpha 16, lr
   `2e-4`, cosine, the rank, alpha and rate of Unsloth's recipe), on the 3060s with the
   `causal_conv1d` and `flash-linear-attention` kernels. The other arms kept the lr constant, then the only
   schedule (now `--lr-schedule constant --warmup-steps 0` for a decoder). The encoders are
@@ -1291,6 +1291,7 @@ this table.
 | Exu decoder Qwen3.5-0.8B, cosine, lr `5e-5` | 1 | 0.652 | 0.187 | 0.109 | 0.954 | 0.091 |
 | Exu decoder Qwen3.5-0.8B, LoRA r16, lr `2e-4` | 3 | 0.802 ± 0.002 | 0.078 ± 0.001 | 0.043 ± 0.000 | 0.846 ± 0.001 | 0.169 ± 0.001 |
 | Exu decoder Qwen3.5-2B, cosine, lr `1e-5` | 3 | 0.797 ± 0.005 | 0.082 ± 0.002 | 0.045 ± 0.001 | 0.849 ± 0.002 | 0.167 ± 0.005 |
+| Exu decoder Qwen3.5-2B, LoRA r16, lr `2e-4` | 3 | **0.807 ± 0.001** | 0.075 ± 0.001 | 0.041 ± 0.001 | 0.842 ± 0.001 | 0.169 ± 0.001 |
 | Exu ModernBERT-large `marker-cls`, lr `1e-5` | 3 | 0.723 ± 0.021 | 0.132 ± 0.017 | 0.072 ± 0.010 | 0.899 ± 0.017 | 0.116 ± 0.021 |
 | Exu ModernBERT-large `marker-cls`, lr `2.5e-5` | 1 | 0.542 | 0.281 | 0.161 | 1.048 | 0.050 |
 | Unsloth Qwen3.5-0.8B, 2 epochs, raw | 3 | 0.685 ± 0.016 | 0.166 ± 0.013 | 0.097 ± 0.008 | 0.934 ± 0.013 | 0.123 ± 0.009 |
@@ -1317,6 +1318,14 @@ this table.
 Seeds: Exu 17, 23, 42; Unsloth 3407 (its default), 17, 23. "1" means seed 17 for
 Exu and 3407 for Unsloth.
 
+- **With LoRA, the Exu decoder on Qwen3.5-2B is the closest arm to Unsloth's 4B.**
+  The same adapters on the 2B reach KL 0.075 ± 0.001, accuracy 0.807 ± 0.001,
+  against 0.078 ± 0.001 on the 0.8B and 0.082 ± 0.002 for both the fully fine-tuned
+  Exu 2B and Unsloth's 2B; NLL and Brier agree. Unlike the full fine-tune, the
+  adapters do use the larger base. Unsloth's 4B stays ahead on KL (0.073 ± 0.001)
+  and ties on accuracy (0.807 ± 0.002). Seed 42 of this arm, the one with the best
+  validation NLL, is published as
+  [exu-qwen3.5-2b-typed-decisions](https://huggingface.co/Ruivalim/exu-qwen3.5-2b-typed-decisions).
 - **With LoRA, the Exu decoder on the 0.8B passes Unsloth's 2B.** Rank-16 adapters
   on Qwen3.5-0.8B reach KL 0.078 ± 0.001 and accuracy 0.802 ± 0.002, against 0.085
   ± 0.001 for the same Exu decoder fully fine-tuned, 0.094 ± 0.003 for Unsloth on
@@ -1393,7 +1402,8 @@ decoder on Qwen3.5-0.8B about two hours on an A40, RTX A6000, RTX 4090 or RTX PR
 4500, and on Qwen3.5-2B about three and a half hours on an A40 or RTX A6000,
 without the `causal_conv1d` and `flash-linear-attention` kernels; with LoRA and the
 kernels, the Exu decoder on Qwen3.5-0.8B about two and a half hours on a 3060, about
-twice as fast as the same run without the kernels. Different cards, so this is an order
+twice as fast as the same run without the kernels, and on Qwen3.5-2B about five and a
+half hours on a 3060. Different cards, so this is an order
 of magnitude, not a ratio.
 
 **Latency**, RTX 4060, one case of five questions per call, p50 and p95 over 100
@@ -1450,7 +1460,7 @@ uv run exu-train --mode baseline --backbone decoder --encoder Qwen/Qwen3-0.6B \
 - The float16 path, which has no `GradScaler`, and any GPU older than Ampere.
 - Whether the temperature map absorbs the bias of section 8's smoothing.
 - Section 14 beyond one synthetic dataset: the Exu decoder at 4B, another lr for it at 2B,
-  ModernBERT-large with the cosine schedule, LoRA in Exu beyond the 0.8B at rank 16, and any tuning of Unsloth beyond
+  ModernBERT-large with the cosine schedule, LoRA in Exu at another rank or at 4B, and any tuning of Unsloth beyond
   the epoch count.
 - A hard-label temperature in Exu, for callers who threshold on the top answer's
   confidence; section 14 shows what it costs on soft targets in Unsloth.

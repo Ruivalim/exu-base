@@ -193,7 +193,9 @@ rate of Unsloth's decision recipe at rank 16, since an update that starts from
 zero needs a larger rate than a full fine-tune. It needs much less memory than a full
 fine-tune: no optimizer state for the frozen weights, and on a GPU those weights are
 kept in the autocast dtype, which changes no result since autocast computes in it
-anyway. That is what fits Qwen3.5-2B on a 12 GB card. The update is merged into the
+anyway. That is what fits Qwen3.5-2B on a 12 GB card. On `typed-decisions` the adapters
+took the Qwen3.5-2B decoder to KL 0.075, against 0.082 fully fine-tuned (section 14
+of `BENCHMARKS.md`). The update is merged into the
 weights after training, before calibration and saving, so the checkpoint is the same as one trained without adapters, and `exu-evaluate`
 and `exu-decide` need nothing new.
 
