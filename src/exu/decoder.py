@@ -22,7 +22,12 @@ Two properties follow from the layout:
 
 - Options never see each other, so the answer cannot depend on option order. A
   permutation of the options permutes the distribution, exactly.
-- The cost is K sequences per question, in training and at inference.
+- The cost is K sequences per question in training. Without gradients (evaluation,
+  calibration, the runtime) each distinct prefix runs once, so the questions about
+  one state share one run of it, and the tails run on its cache. Under causal
+  attention that is the same computation; on Qwen3.5-2B the probabilities moved by
+  at most 0.0006 over 2,000 questions, from where the linear-attention kernels cut
+  their chunks, and no answer changed.
 
 The question part of a sequence (everything but the state) has to fit
 ``header_budget``; a question that does not fit raises instead of being cut.
@@ -74,6 +79,18 @@ class EncodedOptions:
 
     sequences: tuple[tuple[int, ...], ...]
     question_type_id: int
+    prefix_length: int
+    """Leading tokens every sequence shares: the lead and the state."""
+
+    def __post_init__(self) -> None:
+        if not self.sequences:
+            raise ValueError("a question needs at least one option")
+        prefix = self.sequences[0][: self.prefix_length]
+        if self.prefix_length < 1 or any(
+            len(ids) <= self.prefix_length or ids[: self.prefix_length] != prefix
+            for ids in self.sequences
+        ):
+            raise ValueError("every sequence must start with the same prefix and extend past it")
 
     @property
     def option_count(self) -> int:
@@ -120,6 +137,7 @@ class DecoderSequenceBuilder:
         return EncodedOptions(
             sequences=tuple((*prefix, *tail, eos) for tail in tails),
             question_type_id=self.config.type_id(question.kind.value),
+            prefix_length=len(prefix),
         )
 
     def tensors(
@@ -132,7 +150,8 @@ class DecoderSequenceBuilder:
         Sequences are padded on the right, so the last real token of each sits at
         its own length minus one and padding never reaches it through causal
         attention. ``sequence_rows`` and ``sequence_slots`` say which question and
-        which option every sequence is.
+        which option every sequence is, and ``prefix_lengths`` how many leading
+        tokens the sequences of each question share.
         """
         if not encoded:
             raise ValueError("cannot pad an empty batch")
@@ -160,6 +179,9 @@ class DecoderSequenceBuilder:
             "sequence_rows": torch.tensor(rows, dtype=torch.long, device=device),
             "sequence_slots": torch.tensor(slots, dtype=torch.long, device=device),
             "option_mask": option_mask.to(device),
+            "prefix_lengths": torch.tensor(
+                [item.prefix_length for item in encoded], dtype=torch.long, device=device
+            ),
         }
 
     def _clean(self, value: str) -> str:
@@ -214,12 +236,24 @@ class DecoderDecisionModel(nn.Module):
         sequence_slots: Tensor,
         option_mask: Tensor,
         temperature: float | Tensor | None = None,
+        prefix_lengths: Tensor | None = None,
     ) -> DecisionOutput:
-        """Score a batch emitted by :meth:`DecoderSequenceBuilder.tensors`."""
-        hidden = self.backbone(
-            input_ids=input_ids, attention_mask=attention_mask, use_cache=False
-        ).last_hidden_state
-        read = hidden[torch.arange(hidden.size(0), device=hidden.device), read_positions].float()
+        """Score a batch emitted by :meth:`DecoderSequenceBuilder.tensors`.
+
+        Without gradients and with ``prefix_lengths``, each distinct prefix runs
+        once and the tails of every question that shares it run on its cache. With gradients the K
+        full sequences run, as in training.
+        """
+        if prefix_lengths is not None and not torch.is_grad_enabled():
+            read = self._read_shared(
+                input_ids, attention_mask, read_positions, sequence_rows, prefix_lengths
+            )
+        else:
+            hidden = self.backbone(
+                input_ids=input_ids, attention_mask=attention_mask, use_cache=False
+            ).last_hidden_state
+            rows_index = torch.arange(hidden.size(0), device=hidden.device)
+            read = hidden[rows_index, read_positions].float()
         scalar = self.score(self.norm(read)).squeeze(-1)
         rows, width = option_mask.shape
         empty = scalar.new_full((rows, width), torch.finfo(scalar.dtype).min)
@@ -236,3 +270,49 @@ class DecoderDecisionModel(nn.Module):
         features = _distribution_features(probabilities, mask)
         action_logits = self.action_head(torch.cat((pooled, features.detach().float()), dim=-1))
         return DecisionOutput(masked_logits, probabilities, action_logits)
+
+    def _read_shared(
+        self,
+        input_ids: Tensor,
+        attention_mask: Tensor,
+        read_positions: Tensor,
+        sequence_rows: Tensor,
+        prefix_lengths: Tensor,
+    ) -> Tensor:
+        """The read of every sequence, running each distinct prefix once.
+
+        Questions about the same state usually share their prefix token for token,
+        so they share one run of it. The prefix runs alone, its cache is copied once
+        per sequence that continues it, and those tails, padded on the right, run
+        on it in one call. The cache's own ``reorder_cache`` does the copy, so the
+        linear-attention state of a hybrid base such as Qwen3.5 is carried as well
+        as the keys and values of its attention layers.
+        """
+        groups: dict[tuple[int, ...], list[int]] = {}
+        for row, length in enumerate(prefix_lengths.tolist()):
+            members = (sequence_rows == row).nonzero(as_tuple=True)[0]
+            if members.numel():
+                key = tuple(input_ids[members[0], :length].tolist())
+                groups.setdefault(key, []).extend(members.tolist())
+        if not groups:
+            raise ValueError("cannot score an empty batch")
+        read = None
+        for prefix, sequences in groups.items():
+            members = torch.tensor(sequences, dtype=torch.long, device=input_ids.device)
+            length = len(prefix)
+            cache = self.backbone(input_ids=input_ids[members[:1], :length], use_cache=True)
+            cache = cache.past_key_values
+            cache.reorder_cache(members.new_zeros(members.numel()))
+            end = int(read_positions[members].max()) + 1
+            hidden = self.backbone(
+                input_ids=input_ids[members, length:end],
+                attention_mask=attention_mask[members, :end],
+                past_key_values=cache,
+                use_cache=True,
+            ).last_hidden_state
+            local = read_positions[members] - length
+            reads = hidden[torch.arange(members.numel(), device=hidden.device), local].float()
+            if read is None:
+                read = reads.new_empty((input_ids.size(0), reads.size(-1)))
+            read[members] = reads
+        return read

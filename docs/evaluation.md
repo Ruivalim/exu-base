@@ -139,9 +139,10 @@ a human. The report includes the top 50% and top 80%.
 
 `--latency` measures p50 and p95 for 1, 5, 10 and 50 questions in one call. Latency
 grows with the number of questions because the state is re-encoded once per
-question, even in a batch. A `decoder` checkpoint re-encodes it once per
-*option*: K sequences for a question with K options, so its latency grows with the
-option count too. Measure on the hardware you will deploy on, not the
+question, even in a batch. A `decoder` checkpoint reads the state once per call
+for all the questions about it, and then runs one short tail per option: its
+latency grows with the total option count, more slowly than the encoder's grows
+with the question count. Measure on the hardware you will deploy on, not the
 one you trained on.
 
 ## Before you claim a number

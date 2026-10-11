@@ -124,8 +124,10 @@ uv run exu-train \
 
 - Uma época com `--encoder-lr 1e-5` (o default com esse backbone) foi o pico dos
   runs do `BENCHMARKS.md`; mais épocas com taxa constante pioraram.
-- Custo: K sequências para uma pergunta com K opções, no treino e na inferência.
-  O run do GoEmotions (28 opções) levou uma hora por época numa RTX 5090.
+- Custo: K sequências para uma pergunta com K opções no treino. Na inferência o
+  state roda uma vez para todas as perguntas sobre ele e cada opção acrescenta uma
+  cauda curta: no Qwen3.5-2B isso levou um caso de cinco perguntas de 1.024 ms para
+  439 ms numa 3060, com as mesmas respostas. O run do GoEmotions (28 opções) levou uma hora por época numa RTX 5090.
 - Memória: o modelo de 0.6B foi treinado em placas de 12 GB com
   `--grad-checkpointing` e `--batch-size 4 --grad-accum 4`. 8 GB não foi testado;
   pesos, gradientes e estado do AdamW somam uns 9,6 GB só na conta.

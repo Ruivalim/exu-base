@@ -7,6 +7,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Breaking
+
+- `EncodedOptions` has a required `prefix_length`, the leading tokens its sequences
+  share, and refuses sequences that do not share it. `DecoderSequenceBuilder.tensors`
+  emits `prefix_lengths`.
+
+### Changed
+
+- Without gradients the decoder runs each distinct prefix once and every option as a
+  short tail on its cache, so the questions about one state read it once. Evaluation,
+  calibration, `exu-decide` and `DecisionRuntime` get it with no flag; training still
+  runs the K full sequences. On Qwen3.5-2B a case of five questions went from 1,024 ms
+  to 439 ms on an RTX 3060 with the same answers (probabilities within 0.0006).
+
 ## [0.3.0] - 2026-10-11
 
 ### Breaking

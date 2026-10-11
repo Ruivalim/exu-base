@@ -1418,7 +1418,14 @@ test cases after 5 warm-up cases, model already loaded:
 Unsloth ran without `torch.compile` (it failed with a stride assertion on this
 card) and without the `causal_conv1d` kernel, so 73 ms is an upper bound for it.
 The Exu decoder builds one sequence per option, about 18 sequences per case here,
-and re-reads the state in each; that, not the base size, is the 5x.
+and re-reads the state in each; that, not the base size, is the 5x. Those three rows
+predate the shared prefix. With it, the five questions of a case read their state
+once and the 18 options run as short tails on its cache. On the published Qwen3.5-2B
+model (seed 42 with LoRA), float32, on an RTX 3060 with the kernels, a case went from
+1,024 ms to 439 ms at p50 (1,116 to 447 at p95), timed the same way. Over the 2,000
+test questions no answer changed, the probabilities moved by at most 0.0006 and every
+score in the table stayed the same to the fourth decimal. The Qwen3-0.6B row was not
+timed again.
 
 What this does not show. It is one synthetic dataset with teacher-model gold; the
 higher-lr arms have one seed; the Exu decoder was not run at 4B, and of
@@ -1449,7 +1456,7 @@ uv run exu-train --mode baseline --backbone decoder --encoder Qwen/Qwen3-0.6B \
   room. Section 10's second stage started at the peak.
 - More epochs, another sigma schedule, another learning rate.
 - A decoder backbone beyond sections 10 and 14: a shorter first stage before RLCD,
-  a prefix shared across the K sequences, LoRA beyond section 14, and a remedy for its plateau on balanced two-option questions.
+  a prefix shared across the K sequences in training, LoRA beyond section 14, and a remedy for its plateau on balanced two-option questions.
 - Whether four jobs sharing one GPU change a result. Runs are seeded and independent,
   and the `marker` baseline matches the one-job-per-GPU number, but no run was
   repeated both ways.
