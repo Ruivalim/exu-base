@@ -241,10 +241,11 @@ class DecoderDecisionModel(nn.Module):
         """Score a batch emitted by :meth:`DecoderSequenceBuilder.tensors`.
 
         Without gradients and with ``prefix_lengths``, each distinct prefix runs
-        once and the tails of every question that shares it run on its cache. With gradients the K
-        full sequences run, as in training.
+        once and the tails of every question that shares it run on its cache. With
+        gradients, or on a backbone in training mode with gradient checkpointing
+        (which drops any cache it is given), the K full sequences run.
         """
-        if prefix_lengths is not None and not torch.is_grad_enabled():
+        if prefix_lengths is not None and self._can_share_prefix():
             read = self._read_shared(
                 input_ids, attention_mask, read_positions, sequence_rows, prefix_lengths
             )
@@ -270,6 +271,15 @@ class DecoderDecisionModel(nn.Module):
         features = _distribution_features(probabilities, mask)
         action_logits = self.action_head(torch.cat((pooled, features.detach().float()), dim=-1))
         return DecisionOutput(masked_logits, probabilities, action_logits)
+
+    def _can_share_prefix(self) -> bool:
+        # Training runs the full sequences: without gradient checkpointing, which
+        # drops the cache, the shared prefix needed more memory than K checkpointed
+        # sequences and ran slower on Qwen3.5-2B.
+        if torch.is_grad_enabled():
+            return False
+        checkpointing = getattr(self.backbone, "is_gradient_checkpointing", False)
+        return not (self.backbone.training and checkpointing)
 
     def _read_shared(
         self,

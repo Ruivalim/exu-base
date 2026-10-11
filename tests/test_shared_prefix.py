@@ -1,4 +1,4 @@
-"""The decoder's shared prefix: one run per question, the same answers as K full runs."""
+"""The decoder's shared prefix: each distinct prefix runs once, with the K full runs' answers."""
 
 from __future__ import annotations
 
@@ -29,6 +29,12 @@ def _model(name: str) -> tuple[DecoderDecisionModel, DecoderSequenceBuilder]:
     return model.eval(), builder
 
 
+def _full(model: DecoderDecisionModel, batch):
+    """The reference: the K full sequences, which a batch without prefix lengths runs."""
+    with torch.no_grad():
+        return model(**{key: value for key, value in batch.items() if key != "prefix_lengths"})
+
+
 def _batch(builder: DecoderSequenceBuilder) -> dict[str, torch.Tensor]:
     pairs = [(example.state, example.question) for example in smoke_examples("test")]
     # A question with more options than the others, so some rows are padded, and a
@@ -49,12 +55,11 @@ def test_the_shared_prefix_answers_like_the_full_sequences(name) -> None:
 
     with torch.no_grad():
         shared = model(**batch)
-    # With gradients enabled the model runs the K full sequences.
-    full = model(**batch)
+    full = _full(model, batch)
 
     mask = batch["option_mask"]
-    assert torch.allclose(shared.logits[mask], full.logits[mask].detach(), atol=1e-5)
-    assert torch.allclose(shared.probabilities, full.probabilities.detach(), atol=1e-6)
+    assert torch.allclose(shared.logits[mask], full.logits[mask], atol=1e-5)
+    assert torch.allclose(shared.probabilities, full.probabilities, atol=1e-6)
 
 
 @pytest.mark.parametrize("name", sorted(BACKBONES))
@@ -70,7 +75,7 @@ def test_a_state_cut_to_fit_answers_alike_both_ways(name) -> None:
 
     with torch.no_grad():
         shared = model(**batch).logits
-    full = model(**batch).logits.detach()
+    full = _full(model, batch).logits
 
     assert torch.allclose(shared, full, atol=1e-5)
 
@@ -112,12 +117,12 @@ def test_questions_about_one_state_share_one_prefix_run(name) -> None:
     batch = builder.tensors([builder.build(state, question) for question in questions])
 
     shapes, shared = _backbone_calls(model, batch)
-    full = model(**batch)
+    full = _full(model, batch)
 
     # One prefix run, then the 7 tails of the 3 questions in one call.
     assert [shape[0] for shape in shapes] == [1, 7]
     mask = batch["option_mask"]
-    assert torch.allclose(shared.logits[mask], full.logits[mask].detach(), atol=1e-5)
+    assert torch.allclose(shared.logits[mask], full.logits[mask], atol=1e-5)
 
 
 def test_states_of_equal_length_do_not_share_a_prefix() -> None:
@@ -130,10 +135,10 @@ def test_states_of_equal_length_do_not_share_a_prefix() -> None:
     batch = builder.tensors(encoded)
 
     shapes, shared = _backbone_calls(model, batch)
-    full = model(**batch)
+    full = _full(model, batch)
 
     assert len(shapes) == 4
-    assert torch.allclose(shared.logits, full.logits.detach(), atol=1e-5)
+    assert torch.allclose(shared.logits, full.logits, atol=1e-5)
     assert not torch.allclose(shared.logits[0], shared.logits[1])
 
 
@@ -149,6 +154,32 @@ def test_a_batch_without_prefix_lengths_runs_the_full_sequences() -> None:
     hook.remove()
 
     assert len(calls) == 1
+
+
+def test_with_gradients_the_full_sequences_run() -> None:
+    model, builder = _model("qwen3")
+    model.train()
+    calls: list[int] = []
+    hook = model.backbone.register_forward_pre_hook(lambda *_: calls.append(1))
+
+    model(**_batch(builder))
+    hook.remove()
+
+    assert len(calls) == 1
+
+
+def test_a_checkpointing_backbone_in_training_mode_runs_the_full_sequences() -> None:
+    # Such a backbone drops the cache it is given: sharing would read tails alone.
+    model, builder = _model("qwen3")
+    model.train()
+    model.backbone.gradient_checkpointing_enable({"use_reentrant": False})
+    batch = _batch(builder)
+
+    shapes, output = _backbone_calls(model, batch)
+    full = _full(model, batch)
+
+    assert len(shapes) == 1
+    assert torch.equal(output.logits, full.logits)
 
 
 @pytest.mark.parametrize(
