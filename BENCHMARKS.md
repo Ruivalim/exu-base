@@ -5,7 +5,7 @@ a published result of someone else, and nothing is tuned to look good: the proje
 is pre-alpha, the runs are small, and several of them say the toolkit's headline
 method loses to its own baseline.
 
-Last updated 2026-10-11.
+Last updated 2026-10-13.
 
 ## How to read this file
 
@@ -37,6 +37,7 @@ Last updated 2026-10-11.
 | Probe machine | 1x NVIDIA RTX 4060 8 GB, shared with a desktop session |
 | Section 13 | GoEmotions on the 2x RTX 3060 12 GB, one job per GPU; Measuring Hate Speech on the RTX 4060, one job at a time (two did not fit in 8 GB) |
 | Section 14 | Exu arms on the 2x RTX 3060 12 GB (one decoder seed on a rented RTX 3090); Exu decoder on Qwen3.5-0.8B on rented RTX PRO 4500, A40, RTX A6000 and RTX 4090 pods, one run per pod, and on Qwen3.5-2B on A40 or RTX A6000 pods; Exu decoder with LoRA on the 2x RTX 3060 (0.8B and 2B); Unsloth 0.8B on the RTX 4060, 2B and 4B on a rented RTX 3090 (seed 3407) and RTX 4090 (seeds 17, 23); Clef on a rented GPU; latency on the RTX 4060 |
+| Section 15 | the 2x RTX 3060 12 GB, one job per GPU, Qwen3.5-0.8B and Qwen3.5-2B with LoRA r16 |
 | Precision | bfloat16 autocast, log term of the reward always in float32 |
 | Main encoder | `google-bert/bert-base-uncased` |
 | Other encoders tried | `answerdotai/ModernBERT-base` |
@@ -1466,6 +1467,124 @@ uv run exu-train --mode baseline --backbone decoder --encoder Qwen/Qwen3-0.6B \
 # --lr-schedule constant --warmup-steps 0
 ```
 
+## 15. An operator policy as context, 2026-10-13
+
+A record can carry a `context`, text the model reads before the state. This section
+asks whether a model trained with it follows an operator policy written there, and
+what it costs on questions asked without one. Everything is Qwen3.5-0.8B or
+Qwen3.5-2B with LoRA r16 on the 2x RTX 3060, the section 14 recipe (`--lr-schedule cosine --warmup-steps
+10 --option-shuffle --epochs 5 --batch-size 4 --grad-accum 4 --max-length 768
+--calibrate`), seeds 17, 23 and 42 unless a row says otherwise.
+
+**Data.** Two datasets derived from `typed-decisions`, same cases, same splits.
+
+- **Rule.** A context holds one to three rules, "Operator policy: if <condition>,
+  <effect>", with conditions over the case's own fields (tool errors, duration,
+  violations and so on) and effects that point a question at one option. Where a
+  condition holds, the gold becomes one-hot on that option; elsewhere it is left
+  alone. 80% of training records get a context. Every test record has one, and half
+  of the test rules use conditions held out of training. Test buckets: `other` (no
+  rule bears on the question, 1,202), `idle` (a rule bears on it but its condition is
+  false, 509), `fired_seen` (153) and `fired_unseen` (136).
+- **Teacher.** A teacher model (`gpt-6-luna`) wrote 40 natural-language policies per
+  workflow and, given a case, its policies and the original gold, returned an
+  adjusted gold, unchanged where the policy does not bear on the question. 30
+  policies per workflow are for training and 10 are held out for test. About 10% of
+  questions move (total variation above 0.05). Test buckets: `kept_seen` (797),
+  `kept_unseen` (961), `moved_seen` (108), `moved_unseen` (134).
+
+**Arms.**
+
+- `rule` and `teacher`: trained on one of the datasets with its contexts.
+- `blind`: the same targets with the context removed, scored without it. It shows
+  what the context is worth, since everything it cannot explain is noise to it.
+- `mix`: the original records without context, plus the rule records that have a
+  context, plus the teacher records that have one (11,460 training rows against
+  4,420). The validation, calibration and test splits used for model selection and
+  temperature are the original ones.
+- `mix2`: `mix` plus a second batch of teacher policies (160 new ones, 2,360 more
+  training rows). 29 of the new policies turned out to be the held-out ones with a
+  different threshold ("two tool errors" against "three"); every case that used one
+  was dropped before training. Seeds 17 and 23.
+- `published`: the section 14 LoRA r16 arm on the same base, no context in training.
+
+Arms are 0.8B unless the name ends in `2b`.
+
+**Metric.** `KL(gold || pred)` averaged over the bucket, lower is better, mean ± sd
+over seeds.
+
+Original test, no context (2,000 questions):
+
+| Arm | Seeds | KL |
+| --- | --- | --- |
+| published | 3 | 0.078 ± 0.001 |
+| `mix` | 3 | 0.080 ± 0.000 |
+| `mix2` | 2 | 0.080 ± 0.001 |
+| `rule` | 3 | 0.084 ± 0.002 |
+| `teacher` | 3 | 0.089 ± 0.001 |
+| `teacher` blind | 3 | 0.088 ± 0.001 |
+| `rule` blind | 3 | 0.108 ± 0.002 |
+| published 2b | 3 | 0.075 ± 0.001 |
+| `mix` 2b | 3 | 0.076 ± 0.001 |
+| `rule` 2b | 3 | 0.080 ± 0.001 |
+
+Rule test:
+
+| Arm | Seeds | other | idle | fired_seen | fired_unseen |
+| --- | --- | --- | --- | --- | --- |
+| `rule` | 3 | 0.090 ± 0.001 | 0.122 ± 0.010 | 0.029 ± 0.002 | 0.697 ± 0.160 |
+| `mix` | 3 | 0.087 ± 0.001 | 0.101 ± 0.011 | 0.053 ± 0.013 | 0.774 ± 0.080 |
+| `mix2` | 2 | 0.085 ± 0.001 | 0.109 ± 0.002 | 0.045 ± 0.027 | 0.754 ± 0.046 |
+| `rule` blind | 3 | 0.111 ± 0.002 | 0.107 ± 0.003 | 1.579 ± 0.023 | 1.401 ± 0.006 |
+| `rule` 2b | 3 | 0.084 ± 0.001 | 0.112 ± 0.010 | 0.014 ± 0.003 | 0.575 ± 0.074 |
+| `mix` 2b | 3 | 0.079 ± 0.002 | 0.097 ± 0.017 | 0.014 ± 0.004 | 0.715 ± 0.061 |
+
+Teacher test:
+
+| Arm | Seeds | kept_seen | kept_unseen | moved_seen | moved_unseen |
+| --- | --- | --- | --- | --- | --- |
+| `teacher` | 3 | 0.096 ± 0.003 | 0.110 ± 0.005 | 0.392 ± 0.011 | 0.479 ± 0.025 |
+| `mix` | 3 | 0.089 ± 0.001 | 0.116 ± 0.007 | 0.356 ± 0.026 | 0.385 ± 0.035 |
+| `mix2` | 2 | 0.089 ± 0.002 | 0.110 ± 0.001 | 0.366 ± 0.029 | 0.398 ± 0.041 |
+| `teacher` blind | 3 | 0.086 ± 0.001 | 0.090 ± 0.001 | 0.680 ± 0.010 | 0.769 ± 0.006 |
+| `mix` 2b | 3 | 0.082 ± 0.001 | 0.100 ± 0.004 | 0.341 ± 0.031 | 0.369 ± 0.007 |
+
+What this shows.
+
+- **The model reads the context.** Where a rule fires on a condition seen in
+  training, KL falls from 1.579 blind to 0.029. On a held-out condition it falls to
+  0.697, with a wide spread over seeds: it generalizes in part, not reliably.
+  Teacher policies held out of training: 0.479 against 0.769 blind.
+- **Training only on records with a context has a cost.** The specialist arms lose
+  0.006 to 0.011 KL on the original test, and the rule arm overreacts where a rule
+  bears on the question but its condition is false (`idle`, 0.122 against 0.107
+  blind).
+- **Keeping the original records removes most of that cost.** `mix` is within 0.002
+  of the published arm on the original test, below blind on `idle`, and better than
+  the teacher specialist on the questions a policy moved (0.385 against 0.479 on
+  held-out policies). It is less sharp on rules that fire on a seen condition (0.053
+  against 0.029).
+- **A second batch of teacher policies did not help.** `mix2` and `mix` overlap
+  within a standard deviation in every bucket.
+- **At 2B the mix costs almost nothing and the rules get sharp.** `mix` 2b is 0.001
+  from its published arm on the original test, and rules on a seen condition reach
+  0.014, where the 0.8B mix paid 0.053.
+- **The larger base generalizes better to a held-out condition, still not reliably.**
+  The rule specialist goes from 0.697 ± 0.160 at 0.8B to 0.575 ± 0.074 at 2B, against
+  1.401 blind. The `idle` overreaction stays (0.112).
+
+What this does not show. The data is synthetic twice: synthetic traces, and policies
+written by a model or by a template. The teacher policies touch the same fields as
+the held-out rule conditions, so in `mix` and `mix2` the `fired_unseen` bucket is not
+a clean held-out test; generalization is read off the `rule` arms. The blind
+controls and `mix2` ran at 0.8B only, and the teacher specialist was not run at 2B.
+
+```bash
+# The policy builders, the teacher driver, the mixer and the aggregator are working
+# files outside the repository. Each arm runs the section 14 LoRA command on its
+# dataset, then exu-decide on each test file.
+```
+
 ## What has not been measured
 
 - Feedback on a sampled answer from a real judge. Section 13 simulates the judge
@@ -1488,6 +1607,9 @@ uv run exu-train --mode baseline --backbone decoder --encoder Qwen/Qwen3-0.6B \
 - Section 14 beyond one synthetic dataset: the Exu decoder at 4B, another lr for it at 2B,
   ModernBERT-large with the cosine schedule, LoRA in Exu at another rank or at 4B, and any tuning of Unsloth beyond
   the epoch count.
+- Section 15 beyond synthetic policies: policies written by operators, a rule
+  condition the model has never seen read reliably, and the teacher specialist at
+  2B.
 - A hard-label temperature in Exu, for callers who threshold on the top answer's
   confidence; section 14 shows what it costs on soft targets in Unsloth.
 
