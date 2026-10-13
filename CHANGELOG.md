@@ -7,6 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-13
+
 ### Added
 
 - An optional `context` per record (string, object or list): what the answer
@@ -234,7 +236,8 @@ Found by an external review before this first release, and fixed here:
 - The explainer site mirrors the fixed budget allocator, anneals sigma linearly
   like the library, and its dim text clears WCAG AA contrast.
 
-[Unreleased]: https://github.com/ruivalim/exu-base/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ruivalim/exu-base/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/ruivalim/exu-base/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ruivalim/exu-base/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ruivalim/exu-base/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ruivalim/exu-base/releases/tag/v0.1.0
