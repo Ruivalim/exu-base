@@ -301,6 +301,13 @@ How to read it, in order:
 Beware of evaluating on the split you trained on. The numbers will be excellent
 and meaningless.
 
+Keep the three held-out splits to their jobs. Compare recipes, learning rates and
+checkpoints on `validation`; fit the temperature on `calibration` (`--calibrate
+--calibration`); read `test` once, at the end, and do not go back to change the
+recipe because of what it said. Each time a test number picks the next run, the
+test split turns into a second validation split and its numbers stop being
+held-out. If that happened, say so next to the number.
+
 ## 7. Serve it
 
 ```python

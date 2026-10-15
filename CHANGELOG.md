@@ -7,6 +7,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- `BENCHMARKS.md` states the selection order (recipe on validation, temperature
+  on calibration, test read once) and marks sections 14 and 15 as retrospective.
+  Section 14 says its Exu arms trained on the default composite score, not soft
+  cross-entropy. The usage guide, step 6, asks for the same order.
+
 ### Fixed
 
 - `fit_temperature` computes its NLL from `masked_log_softmax` instead of the log

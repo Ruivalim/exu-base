@@ -5,7 +5,7 @@ a published result of someone else, and nothing is tuned to look good: the proje
 is pre-alpha, the runs are small, and several of them say the toolkit's headline
 method loses to its own baseline.
 
-Last updated 2026-10-13.
+Last updated 2026-10-14.
 
 ## How to read this file
 
@@ -21,6 +21,13 @@ Last updated 2026-10-13.
   and the head initialisation. A difference is reported as mean ± sample standard
   deviation over seeds, with the count of seeds where the arm won. Three seeds make
   a weak test: read a tie as a tie.
+- **Selection order.** A recipe or a checkpoint is chosen on the validation split,
+  the temperature is fitted on the calibration split, and the test split is read
+  once, after both, with no variant picked by its test number. A section that broke
+  this says so in its "What this does not show": sections 14 and 15 are
+  retrospective, their later arms were designed after the test numbers of the
+  earlier ones had been read, so the gap between a tuned arm and an untuned one is
+  an upper bound, not a held-out result. Historical numbers stay as they came out.
 - **One dataset, one encoder, three epochs** unless a section says otherwise. None of
   this is a verdict on RLCD in general. The setting its authors report gains in,
   fine-tuning on teacher-model soft targets, is section 11, on one dataset and one
@@ -1596,7 +1603,9 @@ What this shows.
 What this does not show. The data is synthetic twice: synthetic traces, and policies
 written by a model or by a template. The teacher policies touch the same fields as
 the held-out rule conditions, so in `mix` and `mix2` the `fired_unseen` bucket is not
-a clean held-out test; generalization is read off the `rule` arms. The blind
+a clean held-out test; generalization is read off the `rule` arms. The arms are retrospective: `mix2`
+and `rule-v2` were built after the test numbers of `mix` and `rule` had been read,
+with no held-out selection between them. The blind
 controls and `mix2` ran at 0.8B only, and the teacher specialist was not run at 2B.
 `rule-v2` changes which kinds of condition training sees and how often each one
 appears at once, so it does not say which of the two moved the numbers, and it is

@@ -308,6 +308,13 @@ Como ler, nesta ordem:
 Cuidado com avaliar no mesmo split em que treinou. Os números vão ser ótimos e
 sem significado.
 
+Cada split separado tem sua função. Compare receitas, learning rates e checkpoints
+no `validation`; ajuste a temperatura no `calibration` (`--calibrate
+--calibration`); leia o `test` uma vez, no fim, e não volte para mudar a receita
+por causa do que ele mostrou. Toda vez que um número do teste escolhe a próxima
+rodada, o split de teste vira um segundo split de validação e os números dele
+deixam de ser held-out. Se isso aconteceu, diga ao lado do número.
+
 ## 7. Sirva o modelo
 
 ```python
