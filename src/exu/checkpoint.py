@@ -147,6 +147,8 @@ def _read_metadata(source: Path) -> dict:
         )
     if metadata["format_version"] == 1 and "architecture" in metadata:
         raise ValueError("format 1 checkpoints have no architecture block")
+    if metadata["format_version"] == 2 and "architecture" not in metadata:
+        raise ValueError("format 2 checkpoints require an architecture block")
     if not isinstance(metadata.get("model"), dict):
         raise ValueError("checkpoint metadata has no model config")
     return metadata

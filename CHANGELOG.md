@@ -22,6 +22,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `LoRALinear`, before changing either. The first made the layer a child of its
   own adapter, a cycle that broke `state_dict()`; the second reported a merge and
   left the adapter in place.
+- A format 2 checkpoint without an `architecture` block is refused instead of
+  loading as an encoder. Weights of the other architecture were already refused by
+  the key check; format 1 checkpoints load as before.
 
 ## [0.4.0] - 2026-10-13
 

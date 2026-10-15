@@ -36,7 +36,8 @@ option's marker) or `decoder` with `per-option` (one sequence per option, read a
 its last token, experimental). `exu-evaluate`, `exu-decide` and `DecisionRuntime`
 read it from here and take no flag for it. Format 1 has no `architecture` block
 and always means `encoder` with `markers`, so every checkpoint written before the
-decoder existed still loads; a format 1 file that does carry the block is refused.
+decoder existed still loads; a format 1 file that does carry the block is refused,
+and so is a format 2 file that does not.
 
 A checkpoint written before `context_budget` existed loads with the default, 256.
 

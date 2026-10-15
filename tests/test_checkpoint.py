@@ -76,6 +76,17 @@ def test_a_format_1_checkpoint_loads_as_the_encoder_with_markers(tmp_path) -> No
     assert loaded.model_config.readout == "markers"
 
 
+def test_a_format_2_checkpoint_without_an_architecture_block_is_refused(tmp_path) -> None:
+    checkpoint = save_tiny_checkpoint(tmp_path / "checkpoint")
+    metadata_path = checkpoint / "exu.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    del metadata["architecture"]
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="format 2 checkpoints require an architecture block"):
+        load_checkpoint(checkpoint)
+
+
 def test_a_format_1_checkpoint_with_an_architecture_block_is_refused(tmp_path) -> None:
     checkpoint = save_tiny_checkpoint(tmp_path / "checkpoint")
     metadata_path = checkpoint / "exu.json"
