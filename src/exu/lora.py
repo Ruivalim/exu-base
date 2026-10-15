@@ -57,11 +57,16 @@ class LoRALinear(nn.Module):
 
     def merged(self) -> nn.Linear:
         """A plain ``nn.Linear`` whose weight carries the update, in float32."""
-        weight = self.base.weight.detach().float()
-        weight = weight + (self.lora_b.detach() @ self.lora_a.detach()) * self.scaling
+        with torch.autocast(device_type=self.base.weight.device.type, enabled=False):
+            update = self.lora_b.detach().float() @ self.lora_a.detach().float()
+            weight = self.base.weight.detach().float() + update * self.scaling
         bias = self.base.bias is not None
         layer = nn.Linear(
-            self.base.in_features, self.base.out_features, bias=bias, device=weight.device
+            self.base.in_features,
+            self.base.out_features,
+            bias=bias,
+            device=weight.device,
+            dtype=torch.float32,
         )
         with torch.no_grad():
             layer.weight.copy_(weight)

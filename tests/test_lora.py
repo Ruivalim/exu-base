@@ -49,6 +49,36 @@ def test_the_merged_layer_answers_like_the_adapter() -> None:
     assert torch.allclose(merged(inputs), layer(inputs), atol=1e-5)
 
 
+@pytest.mark.parametrize("autocast", [False, True])
+@pytest.mark.parametrize("default_dtype", [torch.float32, torch.float16])
+def test_merge_stays_float32_under_autocast_and_a_low_default_dtype(
+    autocast, default_dtype
+) -> None:
+    model = nn.Sequential(LoRALinear(nn.Linear(1, 1), rank=1, alpha=1))
+    nn.init.zeros_(model[0].base.weight)
+    nn.init.constant_(model[0].base.bias, 0.1)
+    nn.init.constant_(model[0].lora_a, 300.0)
+    nn.init.constant_(model[0].lora_b, 300.0)
+    inputs = torch.tensor([[0.001]], dtype=torch.float32)
+    expected = model(inputs).detach()
+    previous_dtype = torch.get_default_dtype()
+
+    try:
+        torch.set_default_dtype(default_dtype)
+        with torch.autocast(device_type="cpu", dtype=torch.float16, enabled=autocast):
+            count = merge_lora(model)
+    finally:
+        torch.set_default_dtype(previous_dtype)
+
+    assert count == 1
+    assert type(model[0]) is nn.Linear
+    assert model[0].weight.dtype == torch.float32
+    assert model[0].bias.dtype == torch.float32
+    torch.testing.assert_close(model[0].weight, torch.full((1, 1), 90000.0))
+    torch.testing.assert_close(model(inputs), expected)
+    assert merge_lora(model) == 0
+
+
 def test_a_small_update_survives_the_merge_into_a_bfloat16_base() -> None:
     # Added in bfloat16, an update a thousand times smaller than the weight rounds away.
     torch.manual_seed(0)

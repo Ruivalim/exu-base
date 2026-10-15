@@ -14,6 +14,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the NLL went flat in `T` and the fit stayed at 1: logits `[200, 0]` against the
   second option read 87 instead of 200, with a zero gradient. No run in
   `BENCHMARKS.md` came near it, the largest logit gap in their predictions is 17.9.
+- `merge_lora` computes and stores the merged weight in float32 inside autocast or
+  with a float16 default dtype. Before, the adapter product ran in the autocast
+  dtype and could overflow to `inf`. `exu-train` was not affected: it merges on the
+  CPU, outside autocast.
 
 ## [0.4.0] - 2026-10-13
 
