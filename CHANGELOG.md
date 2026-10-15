@@ -18,6 +18,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   with a float16 default dtype. Before, the adapter product ran in the autocast
   dtype and could overflow to `inf`. `exu-train` was not affected: it merges on the
   CPU, outside autocast.
+- `apply_lora` refuses a bare `nn.Linear` and `merge_lora` refuses a bare
+  `LoRALinear`, before changing either. The first made the layer a child of its
+  own adapter, a cycle that broke `state_dict()`; the second reported a merge and
+  left the adapter in place.
 
 ## [0.4.0] - 2026-10-13
 

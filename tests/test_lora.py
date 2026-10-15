@@ -157,6 +157,31 @@ def test_apply_freezes_the_backbone_and_trains_only_the_adapters() -> None:
     assert all(p.requires_grad for p in model.score.parameters())
 
 
+def test_apply_refuses_a_root_linear_before_freezing_or_creating_a_cycle() -> None:
+    layer = nn.Linear(4, 4)
+
+    with pytest.raises(ValueError, match="parent module"):
+        apply_lora(layer, rank=2, alpha=2)
+
+    assert not list(layer.children())
+    assert all(parameter.requires_grad for parameter in layer.parameters())
+    assert set(layer.state_dict()) == {"weight", "bias"}
+
+
+def test_merge_refuses_a_root_adapter_without_registering_an_unused_child() -> None:
+    layer = LoRALinear(nn.Linear(4, 4), rank=2, alpha=2)
+    keys = set(layer.state_dict())
+    trainable = {name: parameter.requires_grad for name, parameter in layer.named_parameters()}
+
+    for _ in range(2):
+        with pytest.raises(ValueError, match="parent module"):
+            merge_lora(layer)
+
+    assert list(layer.children()) == [layer.base]
+    assert set(layer.state_dict()) == keys
+    assert {name: p.requires_grad for name, p in layer.named_parameters()} == trainable
+
+
 def test_a_backbone_without_linear_layers_is_refused() -> None:
     with pytest.raises(ValueError, match="no nn.Linear"):
         apply_lora(nn.Sequential(nn.LayerNorm(4)), rank=2, alpha=2)

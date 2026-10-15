@@ -82,7 +82,10 @@ def apply_lora(
 
     Raises when there is nothing to wrap: a backbone with no linear layer would
     otherwise train nothing at all and look like a run that did.
+    A root ``nn.Linear`` is refused; wrap it with ``LoRALinear`` directly.
     """
+    if isinstance(module, nn.Linear):
+        raise ValueError("apply_lora requires a parent module; use LoRALinear for a single layer")
     if any(isinstance(child, LoRALinear) for child in module.modules()):
         raise ValueError("module already has adapters")
     module.requires_grad_(False)
@@ -97,7 +100,12 @@ def apply_lora(
 
 
 def merge_lora(module: nn.Module) -> int:
-    """Fold every adapter in ``module`` into its layer and drop it. Returns the count."""
+    """Fold every adapter in ``module`` into its layer and drop it. Returns the count.
+
+    A root ``LoRALinear`` is refused; use its ``merged()`` method directly.
+    """
+    if isinstance(module, LoRALinear):
+        raise ValueError("merge_lora requires a parent module; use merged() for a single adapter")
     wrapped = [
         (name, child) for name, child in module.named_modules() if isinstance(child, LoRALinear)
     ]
