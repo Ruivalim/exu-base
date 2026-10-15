@@ -1254,7 +1254,9 @@ this table.
 
 **Arms.**
 
-- Exu `--mode baseline`, soft cross-entropy, 5 epochs, `--option-shuffle`,
+- Exu `--mode baseline` with the default composite score against the soft gold
+  (log score, plus spherical at 0.75 and ranked probability at 1.0 on `score`
+  questions; pure cross-entropy was not run), 5 epochs, `--option-shuffle`,
   `--calibrate`, `--max-length 768`. The decoder is `Qwen/Qwen3-0.6B` (encoder lr
   `1e-5`, batch 4 with `--grad-accum 4`, `--grad-checkpointing`) on a 3060, one seed
   of it on a rented RTX 3090 after it ran out of memory on the 3060. The same flags
