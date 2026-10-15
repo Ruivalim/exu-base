@@ -1508,6 +1508,11 @@ Qwen3.5-2B with LoRA r16 on the 2x RTX 3060, the section 14 recipe (`--lr-schedu
   training rows). 29 of the new policies turned out to be the held-out ones with a
   different threshold ("two tool errors" against "three"); every case that used one
   was dropped before training. Seeds 17 and 23.
+- `rule-v2`: the rule dataset rebuilt with about twelve kinds of condition per
+  workflow in training instead of four, at the same 4,420 training rows. None of the
+  new kinds reads a field a held-out condition reads, and the test split is the rule
+  test, record for record; validation and calibration were drawn again. Each of the
+  four original kinds is about three times rarer in training.
 - `published`: the section 14 LoRA r16 arm on the same base, no context in training.
 
 Arms are 0.8B unless the name ends in `2b`.
@@ -1529,6 +1534,8 @@ Original test, no context (2,000 questions):
 | published 2b | 3 | 0.075 ± 0.001 |
 | `mix` 2b | 3 | 0.076 ± 0.001 |
 | `rule` 2b | 3 | 0.080 ± 0.001 |
+| `rule-v2` | 3 | 0.090 ± 0.000 |
+| `rule-v2` 2b | 3 | 0.085 ± 0.001 |
 
 Rule test:
 
@@ -1540,6 +1547,8 @@ Rule test:
 | `rule` blind | 3 | 0.111 ± 0.002 | 0.107 ± 0.003 | 1.579 ± 0.023 | 1.401 ± 0.006 |
 | `rule` 2b | 3 | 0.084 ± 0.001 | 0.112 ± 0.010 | 0.014 ± 0.003 | 0.575 ± 0.074 |
 | `mix` 2b | 3 | 0.079 ± 0.002 | 0.097 ± 0.017 | 0.014 ± 0.004 | 0.715 ± 0.061 |
+| `rule-v2` | 3 | 0.097 ± 0.003 | 0.171 ± 0.006 | 0.081 ± 0.018 | 0.583 ± 0.049 |
+| `rule-v2` 2b | 3 | 0.087 ± 0.001 | 0.133 ± 0.005 | 0.037 ± 0.003 | 0.409 ± 0.048 |
 
 Teacher test:
 
@@ -1574,12 +1583,25 @@ What this shows.
 - **The larger base generalizes better to a held-out condition, still not reliably.**
   The rule specialist goes from 0.697 ± 0.160 at 0.8B to 0.575 ± 0.074 at 2B, against
   1.401 blind. The `idle` overreaction stays (0.112).
+- **More kinds of condition in training moved one held-out condition, and cost
+  sharpness.** `rule-v2` 2b reaches 0.409 ± 0.048 on a held-out condition against
+  0.575 ± 0.074, outside the spread over seeds; a fourth seed (7) gives 0.408 ±
+  0.039. One of the eight held-out conditions, an invoice due within some days
+  (34 of 136 questions), carries about 90% of that gain, 0.971 to 0.377; without it
+  the bucket goes from 0.443 to 0.420. It pays on what the original kinds cover, now
+  three times rarer: 0.037 against 0.014 on a seen condition, 0.133 against 0.112 on
+  `idle`, 0.085 against 0.080 on the original test. At 0.8B the gain is inside the
+  spread (0.583 ± 0.049 against 0.697 ± 0.160) and the costs are larger.
 
 What this does not show. The data is synthetic twice: synthetic traces, and policies
 written by a model or by a template. The teacher policies touch the same fields as
 the held-out rule conditions, so in `mix` and `mix2` the `fired_unseen` bucket is not
 a clean held-out test; generalization is read off the `rule` arms. The blind
 controls and `mix2` ran at 0.8B only, and the teacher specialist was not run at 2B.
+`rule-v2` changes which kinds of condition training sees and how often each one
+appears at once, so it does not say which of the two moved the numbers, and it is
+not evidence of a general skill at reading a new condition. Some of the new kinds
+share wording with the held-out ones while reading other fields.
 
 ```bash
 # The policy builders, the teacher driver, the mixer and the aggregator are working
