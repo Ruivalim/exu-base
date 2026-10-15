@@ -103,6 +103,18 @@ def metrics_for(collected: Collected, temperature: TemperatureMap) -> DecisionMe
     )
 
 
+def metrics_on_rows(
+    collected: Collected, temperature: TemperatureMap, rows: Tensor
+) -> DecisionMetrics:
+    """Metrics on the rows a boolean index selects, under one temperature map."""
+    return classification_metrics(
+        collected.probabilities(temperature)[rows],
+        collected.target[rows],
+        collected.option_mask[rows],
+        ordinal_mask=collected.ordinal_mask()[rows],
+    )
+
+
 def grouped_metrics(
     collected: Collected, temperature: TemperatureMap, group: str = "kind"
 ) -> dict[str, DecisionMetrics]:
@@ -118,19 +130,38 @@ def grouped_metrics(
         keys = collected.families
     else:
         raise ValueError("group must be 'kind' or 'family'")
-    result: dict[str, DecisionMetrics] = {}
-    for key in sorted({value for value in keys if value is not None}):
-        index = torch.tensor([value == key for value in keys], dtype=torch.bool)
-        if not bool(index.any()):
-            continue
-        probabilities = collected.probabilities(temperature)
-        result[key] = classification_metrics(
-            probabilities[index],
-            collected.target[index],
-            collected.option_mask[index],
-            ordinal_mask=collected.ordinal_mask()[index],
-        )
-    return result
+    rows, _missing = group_rows(keys)
+    return {key: metrics_on_rows(collected, temperature, index) for key, index in rows.items()}
+
+
+GROUP_FIELDS = ("kind", "family", "language", "split")
+"""Record fields ``--group-by`` accepts as they are; ``metadata.<key>`` is the rest."""
+
+
+def group_values(examples: Sequence[TrainingExample], field: str) -> list[str | None]:
+    """The value of a grouping field on each example, ``None`` where it is absent.
+
+    ``field`` is one of :data:`GROUP_FIELDS` or ``metadata.<key>``. Anything else
+    raises, so a typo in a field name is an error and not an empty report.
+    """
+    if field == "kind":
+        return [example.question.kind.value for example in examples]
+    if field in GROUP_FIELDS:
+        return [getattr(example, field) for example in examples]
+    prefix, _, key = field.partition(".")
+    if prefix != "metadata" or not key.strip():
+        known = ", ".join(GROUP_FIELDS)
+        raise ValueError(f"unknown group field {field!r}: use one of {known} or metadata.<key>")
+    return [example.metadata.get(key) for example in examples]
+
+
+def group_rows(keys: Sequence[str | None]) -> tuple[dict[str, Tensor], Tensor]:
+    """A boolean row index per group, sorted by value, and the index of absent rows."""
+    rows = {
+        key: torch.tensor([value == key for value in keys], dtype=torch.bool)
+        for key in sorted({value for value in keys if value is not None})
+    }
+    return rows, torch.tensor([value is None for value in keys], dtype=torch.bool)
 
 
 def order_robustness(

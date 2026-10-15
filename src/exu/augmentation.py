@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import random
 from collections.abc import Sequence
+from dataclasses import replace
 
 from .data import TrainingExample
 from .types import DecisionQuestion, DecisionType
@@ -41,16 +42,7 @@ def permute_example(example: TrainingExample, order: Sequence[int]) -> TrainingE
         raise ValueError("order length must equal option count")
     options = tuple(example.question.options[index] for index in order)
     question = DecisionQuestion(example.question.kind, example.question.instruction, options)
-    return TrainingExample(
-        example_id=example.example_id,
-        state=example.state,
-        question=question,
-        target=permute_target(example.target, order),
-        split=example.split,
-        family=example.family,
-        language=example.language,
-        context=example.context,
-    )
+    return replace(example, question=question, target=permute_target(example.target, order))
 
 
 def shuffle_example(example: TrainingExample, generator: random.Random) -> TrainingExample:

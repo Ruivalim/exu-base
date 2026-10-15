@@ -38,8 +38,29 @@ record per line.
 | `split` | no | `train`, `validation`, `calibration`, `test`, or your own names. |
 | `family` | no | Task family, used for grouped metrics and honest held-out splits. |
 | `language` | no | Language variant tag, for provenance. |
+| `case_id` | no | Non-empty. Which case the record belongs to: records that share a state share a `case_id`. Never read by the model. |
+| `metadata` | no | Flat object of string keys to string values, for grouping reports. Never read by the model. |
 
 `noul` questions must have exactly two options. A blank description is dropped.
+
+## Case and metadata
+
+`case_id` and `metadata` are provenance. The builder never sees them, so changing
+either leaves the sequence the model reads exactly as it was, and both survive
+`write_jsonl` and option shuffling.
+
+`case_id` says which questions are about the same case. Five questions about one
+state are five rows but one case, and they are not independent evidence:
+`exu-evaluate` reports `rows_with_case_id` and `distinct_cases` under `cases`, and
+leaves `distinct_cases` `null` when no row has a `case_id` instead of guessing the
+row count.
+
+`metadata` holds whatever you want a report split by, such as the policy a record
+was built from: `{"policy_family_id": "refunds", "generator": "template"}`. Values
+must be strings; a number, a list or a nested object is refused at load, so a
+group key never depends on how a number was printed. `exu-evaluate --group-by
+metadata.policy_family_id` then reports per value. A record without that key is
+counted under `missing`.
 
 ## Context
 

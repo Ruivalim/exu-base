@@ -10,6 +10,11 @@ split of ``--data`` unless ``--reference`` says otherwise, and never on the spli
 being scored. Without a usable reference they are reported as unavailable, with
 the reason, instead of quietly falling back to the evaluation labels.
 
+``--group-by`` (repeatable) adds the same report, model and baselines, split by a
+record field or ``metadata.<key>``. Rows without that field are a group of their
+own, ``missing``, never dropped. The baselines are still fitted on the reference;
+grouping only splits their forecasts.
+
 Optional passes: order robustness (does the answer survive an option permutation)
 and latency (p50/p95 for 1, 5, 10 and 50 questions in one call).
 """
@@ -22,17 +27,23 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 
+from torch import Tensor
 from torch.utils.data import DataLoader
 
 from .architecture import builder_for
+from .calibration import TemperatureMap
 from .checkpoint import load_checkpoint, load_tokenizer
-from .data import DecisionDataset, TrainingBatch, load_jsonl
+from .data import DecisionDataset, TrainingBatch, TrainingExample, load_jsonl
 from .devices import resolve_device
 from .evaluation import (
+    Collected,
     collect,
+    group_rows,
+    group_values,
     grouped_metrics,
     latency_benchmark,
     metrics_for,
+    metrics_on_rows,
     order_robustness,
 )
 from .metrics import (
@@ -60,6 +71,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--reference-split",
         default="train",
         help="split of the reference file to fit the baselines on",
+    )
+    parser.add_argument(
+        "--group-by",
+        action="append",
+        default=[],
+        type=_group_field,
+        metavar="FIELD",
+        help="also report per value of kind, family, language, split or metadata.<key>"
+        " (repeatable)",
     )
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
@@ -92,6 +112,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     collected = collect(checkpoint.model, loader, device)
     temperature = checkpoint.temperature
 
+    baselines, forecasts = _baselines(
+        examples,
+        reference=args.reference or args.data,
+        reference_split=args.reference_split,
+        data=args.data,
+        split=args.split,
+    )
     report: dict[str, object] = {
         "checkpoint": str(args.checkpoint),
         "data": str(args.data),
@@ -107,17 +134,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             key: asdict(value)
             for key, value in grouped_metrics(collected, temperature, "family").items()
         },
-        "baselines": _baselines(
-            examples,
-            reference=args.reference or args.data,
-            reference_split=args.reference_split,
-            data=args.data,
-            split=args.split,
-        ),
+        "baselines": baselines,
+        "cases": _cases(examples),
         "coverage": selective_coverage(
             collected.probabilities(temperature), collected.target, collected.option_mask
         ),
     }
+    if args.group_by:
+        report["by_group"] = {
+            field: _group_report(examples, collected, temperature, forecasts, field)
+            for field in dict.fromkeys(args.group_by)
+        }
     if args.order_permutations > 0:
         report["order_robustness"] = order_robustness(
             checkpoint.model,
@@ -152,7 +179,11 @@ def _baselines(
     reference_split: str,
     data: Path,
     split: str | None,
-) -> dict[str, object]:
+) -> tuple[dict[str, object], dict[str, Tensor]]:
+    """The baseline report, and the forecasts behind it for per-group scoring.
+
+    ``majority`` is a one-hot forecast; only its accuracy is ever reported.
+    """
     targets, mask, kinds, _counts = stack_examples(examples)
     ordinal = _ordinal_mask(kinds)
 
@@ -168,8 +199,9 @@ def _baselines(
             )
         )
 
+    forecasts = {"uniform": uniform_baseline(examples)}
     report: dict[str, object] = {
-        "uniform": score(uniform_baseline(examples)),
+        "uniform": score(forecasts["uniform"]),
         "prior": None,
         "majority": None,
         "prior_in_sample": score(prior_in_sample_baseline(examples)),
@@ -186,19 +218,76 @@ def _baselines(
 
     prior = _fit_reference(reference, reference_split, data, split, provenance)
     if prior is None:
-        return report
+        return report, forecasts
 
     predictions, seen = prior.predict(examples)
     provenance["seen_rows"] = int(seen.sum().item())
     provenance["unseen_rows"] = int((~seen).sum().item())
+    forecasts["prior"] = predictions
+    forecasts["majority"] = prior.majority(examples)
     report["prior"] = score(predictions)
     if seen.any() and not seen.all():
         report["prior_seen"] = score(predictions, seen)
         report["prior_unseen"] = score(predictions, ~seen)
     # A one-hot forecast puts an exact zero on every outcome it misses, so its NLL
     # is the error rate times -log(float32 tiny). Only the accuracy means anything.
-    report["majority"] = {"accuracy": score(prior.majority(examples))["accuracy"]}
-    return report
+    report["majority"] = {"accuracy": score(forecasts["majority"])["accuracy"]}
+    return report, forecasts
+
+
+def _group_report(
+    examples: Sequence[TrainingExample],
+    collected: Collected,
+    temperature: TemperatureMap,
+    forecasts: dict[str, Tensor],
+    field: str,
+) -> dict[str, object]:
+    rows, missing = group_rows(group_values(examples, field))
+    targets, mask, kinds, _counts = stack_examples(examples)
+    ordinal = _ordinal_mask(kinds)
+
+    def section(index: Tensor) -> dict[str, object]:
+        baselines: dict[str, object] = {"prior": None, "majority": None}
+        for name, forecast in forecasts.items():
+            scored = asdict(
+                classification_metrics(
+                    forecast[index], targets[index], mask[index], ordinal_mask=ordinal[index]
+                )
+            )
+            baselines[name] = {"accuracy": scored["accuracy"]} if name == "majority" else scored
+        return {
+            "rows": int(index.sum().item()),
+            "metrics": asdict(metrics_on_rows(collected, temperature, index)),
+            "baselines": baselines,
+        }
+
+    return {
+        "rows": len(examples),
+        "groups": {key: section(index) for key, index in rows.items()},
+        "missing": section(missing) if bool(missing.any()) else {"rows": 0},
+    }
+
+
+def _cases(examples: Sequence[TrainingExample]) -> dict[str, object]:
+    """How many independent cases the rows rest on, as far as ``case_id`` says.
+
+    Without a ``case_id`` nothing says which questions share a state, so the count
+    of distinct cases is ``None`` rather than the row count.
+    """
+    ids = [example.case_id for example in examples if example.case_id is not None]
+    return {
+        "rows": len(examples),
+        "rows_with_case_id": len(ids),
+        "distinct_cases": len(set(ids)) if ids else None,
+    }
+
+
+def _group_field(value: str) -> str:
+    try:
+        group_values([], value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+    return value
 
 
 def _fit_reference(

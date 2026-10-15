@@ -7,6 +7,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Two optional record fields, `case_id` and `metadata` (a flat map of strings to
+  strings). Both survive `write_jsonl` and option shuffling and never reach the
+  sequence the model reads. A `metadata` value that is not a string is refused.
+- `exu-evaluate --group-by FIELD`, repeatable, for `kind`, `family`, `language`,
+  `split` or `metadata.<key>`. Each group carries its rows, metrics and baselines;
+  rows without the field are reported under `missing`, and an unknown field is an
+  error. The baselines are the reference-fitted forecasts split by group, never
+  refitted on it.
+- Every `exu-evaluate` report carries `cases`: rows, rows with a `case_id`, and
+  distinct cases, `null` when no row has a `case_id`.
+
 ### Changed
 
 - `BENCHMARKS.md` states the selection order (recipe on validation, temperature

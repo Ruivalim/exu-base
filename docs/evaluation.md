@@ -24,7 +24,9 @@ exu-evaluate \
 | `rps` | Ranked probability score, ordinal questions only |
 | `ordinal_mae` | Absolute error of the expected level, ordinal questions only |
 
-Reported overall, per question kind, and per task family.
+Reported overall, per question kind, and per task family. `--group-by FIELD`,
+repeatable, adds the same split for `kind`, `family`, `language`, `split` or
+`metadata.<key>`, under `by_group`; see [Grouping](#grouping).
 
 `accuracy` and `ece` are hard-decision metrics: both compare the prediction with
 `argmax(target)`. With a soft target a perfectly honest forecast still has a
@@ -101,11 +103,33 @@ question's option count matches (verified in the tests), so a model that
 cannot beat it has learned nothing. Its `ECE` is not zero: the maximum
 probability is `1/K`, and a 15-bin ECE reads that as a small miscalibration. Do
 not pool questions with different option counts when reading the uniform
-baseline: use its per-kind and per-family breakdowns instead.
+baseline: split it with `--group-by kind` instead.
 
 This is not decoration. In Laya the base multilingual
 checkpoints scored below the majority-class baseline on unseen task families, and
 nobody would have noticed without the comparison.
+
+## Grouping
+
+`exu-evaluate --group-by metadata.policy_family_id --group-by language` adds one
+entry per field under `by_group`:
+
+| Key | Meaning |
+| --- | --- |
+| `rows` | Every row scored, the same population as the overall metrics. |
+| `groups` | One entry per value, sorted: `rows`, `metrics`, and `baselines` (`uniform`, `prior`, `majority` accuracy). |
+| `missing` | The rows without that field, with the same keys, or `{"rows": 0}`. Never dropped. |
+
+The group counts plus `missing.rows` add up to `rows`. A field name the evaluator
+does not know is an error, not an empty report. The baselines inside a group are
+the same forecasts as the overall ones, fitted on the reference and only split
+here, so `prior` is `null` in every group when it is `null` overall. Read a small
+group as a small group: nothing here adds an interval.
+
+`cases` sits next to it in every report: `rows`, `rows_with_case_id` and
+`distinct_cases`. Questions about one case share a state and are not independent;
+when the data carries no `case_id`, `distinct_cases` is `null`, because the number
+of independent cases is unknown, not equal to the row count.
 
 ## Order robustness
 

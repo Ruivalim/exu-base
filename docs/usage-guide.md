@@ -54,6 +54,9 @@ Rules that matter, with the full list in [dataset-format.md](dataset-format.md):
   policy the case is judged by. It is read before the state, with its own budget,
   `--context-budget` (256 tokens), and a context over it is refused, never cut. The
   model learns to use a context only from records where it changes the target.
+- `case_id` and `metadata` are optional and never read by the model. `case_id`
+  ties together the questions about one case; `metadata` is a flat map of strings
+  that `exu-evaluate --group-by metadata.<key>` splits a report by.
 
 To convert an existing dataset, build `TrainingExample` objects straight from
 records, or with `DecisionQuestion`:
@@ -297,6 +300,20 @@ How to read it, in order:
 4. **`coverage.top_0.5` above `coverage.all`.** If answering only the most
    confident half does not raise accuracy, confidence is useless for gating.
 5. **Latency**, if you plan to serve it.
+
+To split the report by something the data knows, add `--group-by`, once per
+field: `kind`, `family`, `language`, `split`, or a key under the record's
+`metadata`.
+
+```bash
+uv run exu-evaluate \
+  --checkpoint artifacts/exu \
+  --data data/tickets.jsonl --split test \
+  --group-by family --group-by metadata.policy_family_id
+```
+
+Each group carries its own baselines, and rows without the field are counted under
+`missing` instead of disappearing.
 
 Beware of evaluating on the split you trained on. The numbers will be excellent
 and meaningless.

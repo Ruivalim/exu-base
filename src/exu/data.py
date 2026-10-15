@@ -14,11 +14,18 @@ One JSONL record is one fully specified typed decision::
       "target": [0.2, 0.8],
       "split": "train" | "validation" | "test" | "calibration",
       "family": "routing",
-      "language": "en"
+      "language": "en",
+      "case_id": "case-17",                                    (optional)
+      "metadata": {"policy_family_id": "refunds"}              (optional)
     }
 
 The optional context is what the answer depends on besides the state: a policy,
 a rubric, background. The model reads it before the state.
+
+``case_id`` and ``metadata`` are provenance, never model input: the builder does
+not see them. ``case_id`` says which questions share a case, so a report can tell
+how many independent cases it rests on; ``metadata`` is a flat map of strings
+that ``exu-evaluate --group-by metadata.<key>`` splits a report by.
 
 The target is a distribution, not a label. Soft targets let several annotators
 or a teacher model express disagreement, which is exactly the signal a
@@ -30,8 +37,9 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import torch
@@ -54,6 +62,8 @@ class TrainingExample:
     family: str | None = None
     language: str | None = None
     context: str | None = None
+    case_id: str | None = None
+    metadata: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.example_id.strip():
@@ -70,6 +80,9 @@ class TrainingExample:
             raise ValueError("split cannot be empty")
         if self.family is not None and not self.family.strip():
             raise ValueError("family cannot be empty")
+        if self.case_id is not None and not self.case_id.strip():
+            raise ValueError("case_id cannot be empty")
+        object.__setattr__(self, "metadata", _metadata(self.metadata))
 
     @property
     def option_count(self) -> int:
@@ -90,6 +103,8 @@ class TrainingExample:
                 _optional_string(record.get("family")),
                 _optional_string(record.get("language")),
                 context_text(record.get("context")),
+                _optional_string(record.get("case_id")),
+                _metadata(record.get("metadata", {})),
             )
         except KeyError as error:
             raise ValueError(f"record missing required field {error.args[0]!r}") from error
@@ -115,6 +130,10 @@ class TrainingExample:
         }
         if self.context is not None:
             record["context"] = _parse_state(self.context)
+        if self.case_id is not None:
+            record["case_id"] = self.case_id
+        if self.metadata:
+            record["metadata"] = dict(self.metadata)
         return record
 
 
@@ -317,6 +336,20 @@ def _string(value: Any, name: str) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string")
     return value
+
+
+def _metadata(value: Any) -> Mapping[str, str]:
+    """A read-only copy of a flat string-to-string map; anything else is refused."""
+    if value is None:
+        value = {}
+    if not isinstance(value, Mapping):
+        raise TypeError("metadata must be an object")
+    for key, item in value.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("metadata keys must be non-empty strings")
+        if not isinstance(item, str):
+            raise TypeError(f"metadata value for {key!r} must be a string")
+    return MappingProxyType(dict(value))
 
 
 def _optional_string(value: Any) -> str | None:

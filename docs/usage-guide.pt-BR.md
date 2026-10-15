@@ -55,6 +55,9 @@ Regras que importam, com a lista completa em [dataset-format.md](dataset-format.
   próprio, `--context-budget` (256 tokens), e um contexto acima dele é recusado,
   nunca cortado. O modelo só aprende a usar o contexto com registros em que ele
   muda o alvo.
+- `case_id` e `metadata` são opcionais e o modelo nunca lê nenhum dos dois.
+  `case_id` amarra as perguntas sobre um mesmo caso; `metadata` é um mapa plano de
+  strings pelo qual `exu-evaluate --group-by metadata.<chave>` quebra o relatório.
 
 Para converter um dataset que já existe, monte objetos `TrainingExample` direto
 de registros, ou com `DecisionQuestion`:
@@ -304,6 +307,20 @@ Como ler, nesta ordem:
 4. **`coverage.top_0.5` acima de `coverage.all`.** Se responder só a metade mais
    confiante não aumenta a acurácia, a confiança não serve para gating.
 5. **Latência**, se você pretende servir.
+
+Para quebrar o relatório por algo que os dados sabem, use `--group-by`, uma vez
+por campo: `kind`, `family`, `language`, `split`, ou uma chave do `metadata` do
+registro.
+
+```bash
+uv run exu-evaluate \
+  --checkpoint artifacts/exu \
+  --data data/tickets.jsonl --split test \
+  --group-by family --group-by metadata.policy_family_id
+```
+
+Cada grupo traz os próprios baselines, e as linhas sem o campo entram em `missing`
+em vez de sumir.
 
 Cuidado com avaliar no mesmo split em que treinou. Os números vão ser ótimos e
 sem significado.

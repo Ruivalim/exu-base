@@ -5,13 +5,16 @@ from dataclasses import replace
 
 import pytest
 import torch
-from helpers import smoke_examples, tiny_dataset, tiny_model, tiny_tokenizer
+from helpers import SMOKE, smoke_examples, tiny_dataset, tiny_model, tiny_tokenizer
 from torch.utils.data import DataLoader
 
 from exu import DecisionDataset, TemperatureMap, evaluation
 from exu.augmentation import random_order
+from exu.data import load_jsonl
 from exu.evaluation import (
     collect,
+    group_rows,
+    group_values,
     grouped_metrics,
     latency_benchmark,
     metrics_for,
@@ -198,3 +201,26 @@ def test_latency_benchmark_reports_percentiles() -> None:
     assert set(report) == {"1", "3"}
     assert report["1"]["p50_ms"] > 0
     assert report["3"]["p95_ms"] >= report["3"]["p50_ms"]
+
+
+def test_group_values_read_record_fields_and_metadata() -> None:
+    examples = load_jsonl(SMOKE, "test")
+    tagged = [replace(examples[0], metadata={"policy": "a"}), *examples[1:]]
+
+    assert group_values(examples, "kind") == ["noul", "choice", "score", "noul"]
+    assert group_values(examples, "split") == ["test"] * 4
+    assert group_values(tagged, "metadata.policy") == ["a", None, None, None]
+    with pytest.raises(ValueError, match="unknown group field"):
+        group_values(examples, "state")
+
+
+def test_group_rows_partition_every_row_once() -> None:
+    rows, missing = group_rows(["b", None, "a", "b", None])
+
+    assert list(rows) == ["a", "b"]
+    total = missing.clone()
+    for index in rows.values():
+        assert not bool((total & index).any())
+        total |= index
+    assert bool(total.all())
+    assert missing.tolist() == [False, True, False, False, True]

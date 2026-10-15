@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from dataclasses import replace
 
 import pytest
 
@@ -92,3 +93,12 @@ def test_noul_and_choice_questions_are_still_shuffled() -> None:
     }
 
     assert len(orders) > 1
+
+
+def test_shuffling_keeps_case_id_and_metadata() -> None:
+    tagged = replace(example(), case_id="case-7", metadata={"policy_family_id": "refunds"})
+
+    shuffled = OptionShuffler(seed=3)(tagged)
+
+    assert shuffled.case_id == "case-7"
+    assert dict(shuffled.metadata) == {"policy_family_id": "refunds"}

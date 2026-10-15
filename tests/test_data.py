@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import torch
 from helpers import FakeTokenizer
 
 from exu.data import DecisionDataset, TrainingExample, load_jsonl, write_jsonl
@@ -165,3 +166,69 @@ def test_dataset_applies_a_transform_per_access() -> None:
 def test_dataset_rejects_empty_input() -> None:
     with pytest.raises(ValueError, match="empty"):
         DecisionDataset([], SequenceBuilder(FakeTokenizer()))
+
+
+def test_a_record_without_provenance_loads_as_before() -> None:
+    example = TrainingExample.from_record(record())
+
+    assert example.case_id is None
+    assert dict(example.metadata) == {}
+    assert "case_id" not in example.to_record()
+    assert "metadata" not in example.to_record()
+
+
+def test_case_id_and_metadata_survive_a_round_trip(tmp_path) -> None:
+    raw = record() | {"case_id": "case-7", "metadata": {"policy_family_id": "refunds"}}
+    path = tmp_path / "provenance.jsonl"
+
+    write_jsonl(path, [TrainingExample.from_record(raw)])
+    (restored,) = load_jsonl(path)
+
+    assert restored.case_id == "case-7"
+    assert dict(restored.metadata) == {"policy_family_id": "refunds"}
+
+
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    [
+        ({"rank": 3}, "must be a string"),
+        ({"tags": ["a"]}, "must be a string"),
+        ({"": "x"}, "non-empty strings"),
+        (["policy"], "must be an object"),
+        ("policy", "must be an object"),
+    ],
+)
+def test_metadata_outside_the_string_map_contract_is_refused(metadata, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        TrainingExample.from_record(record() | {"metadata": metadata})
+
+
+def test_an_empty_case_id_is_refused() -> None:
+    with pytest.raises(ValueError, match="case_id"):
+        TrainingExample.from_record(record() | {"case_id": " "})
+
+
+def test_metadata_cannot_be_changed_behind_the_frozen_example() -> None:
+    source = {"policy_family_id": "refunds"}
+    example = TrainingExample.from_record(record() | {"metadata": source})
+
+    source["policy_family_id"] = "changed"
+
+    assert example.metadata["policy_family_id"] == "refunds"
+    with pytest.raises(TypeError):
+        example.metadata["policy_family_id"] = "changed"  # type: ignore[index]
+
+
+def test_provenance_never_reaches_the_model_input() -> None:
+    builder = SequenceBuilder(FakeTokenizer())
+    plain = TrainingExample.from_record(record())
+    tagged = TrainingExample.from_record(
+        record() | {"case_id": "case-7", "metadata": {"policy": "action required"}}
+    )
+
+    batches = [
+        DecisionDataset([example], builder).collate([example]) for example in (plain, tagged)
+    ]
+
+    for name, tensor in batches[0].inputs.items():
+        assert torch.equal(tensor, batches[1].inputs[name]), name
