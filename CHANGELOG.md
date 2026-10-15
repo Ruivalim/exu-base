@@ -7,6 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- `fit_temperature` computes its NLL from `masked_log_softmax` instead of the log
+  of a clamped softmax. On a confident miss the softmax underflowed to the clamp,
+  the NLL went flat in `T` and the fit stayed at 1: logits `[200, 0]` against the
+  second option read 87 instead of 200, with a zero gradient. No run in
+  `BENCHMARKS.md` came near it, the largest logit gap in their predictions is 17.9.
+
 ## [0.4.0] - 2026-10-13
 
 ### Added

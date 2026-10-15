@@ -153,3 +153,19 @@ def test_map_skips_cells_without_enough_rows() -> None:
     assert set(temperature.by_bucket) == {"score:3-5"}
     assert fits["bucket:choice:2"].fallback is True
     assert fits["type:choice"].fallback is False
+
+
+def test_fit_temperature_scores_a_confident_miss_in_log_space() -> None:
+    # A softmax of [200, 0] underflows to an exact zero on the target option. Read
+    # through a clamp, the NLL is about 87 at any small T and flat in T, so the fit
+    # never moves. The log-space NLL is 200 / T, and a miss pushes T up.
+    logits = torch.tensor([[200.0, 0.0]]).repeat(64, 1)
+    target = torch.tensor([[0.0, 1.0]]).repeat(64, 1)
+    mask = torch.ones(64, 2, dtype=torch.bool)
+
+    fit = fit_temperature(logits, target, mask, min_samples=1)
+
+    assert fit.nll_before == pytest.approx(200.0)
+    assert fit.temperature > 9.9
+    assert fit.at_bound
+    assert fit.nll_after == pytest.approx(200.0 / fit.temperature, rel=1e-4)

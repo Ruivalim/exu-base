@@ -29,7 +29,8 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from .model import masked_softmax
+from .model import masked_log_softmax
+from .scoring import log_score
 
 DEFAULT_BOUNDS: tuple[float, float] = (0.1, 10.0)
 _OPTION_BUCKETS: tuple[tuple[int, int, str], ...] = (
@@ -102,12 +103,12 @@ def fit_temperature(
     logits = logits.float().detach()
     target = target.float().detach()
     mask = option_mask.bool()
-    tiny = torch.finfo(logits.dtype).tiny
     low, high = bounds
 
     def negative_log_likelihood(temperature: Tensor) -> Tensor:
-        probabilities = masked_softmax(logits, mask, temperature)
-        return -(target * probabilities.clamp_min(tiny).log()).sum(dim=-1).mean()
+        # In log space: log(softmax) underflows to a clamp on a confident miss,
+        # which flattens the NLL and zeroes its gradient in T exactly there.
+        return -log_score(masked_log_softmax(logits, mask, temperature), target).mean()
 
     # Optimize in a bounded space. Working on exp(log T) lets a line search
     # overflow to infinity, which poisons the closure and raises from inside
