@@ -63,7 +63,7 @@ from .policy import (
     policy_gradient_loss,
     sigma_for,
 )
-from .runtime import Decision, DecisionRuntime
+from .runtime import Decision, DecisionRuntime, StateTruncatedError
 from .scoring import (
     composite_score,
     log_score,
@@ -71,7 +71,13 @@ from .scoring import (
     ranked_probability_score,
     spherical_score,
 )
-from .sequence import DecisionBuilder, EncodedQuestion, SequenceBuilder, SequenceConfig
+from .sequence import (
+    DecisionBuilder,
+    EncodedQuestion,
+    InputUsage,
+    SequenceBuilder,
+    SequenceConfig,
+)
 from .types import DecisionQuestion, DecisionType, Option
 
 __all__ = [
@@ -91,6 +97,7 @@ __all__ = [
     "DecoderSequenceBuilder",
     "EncodedOptions",
     "EncodedQuestion",
+    "InputUsage",
     "LoRALinear",
     "Option",
     "PolicyConfig",
@@ -100,6 +107,7 @@ __all__ = [
     "ExuModel",
     "SequenceBuilder",
     "SequenceConfig",
+    "StateTruncatedError",
     "TemperatureFit",
     "TemperatureMap",
     "TrainingBatch",

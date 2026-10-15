@@ -355,6 +355,14 @@ print(decision.label, decision.probabilities, decision.confidence, decision.shou
   the calibrated maximum probability. Read the confidence section of
   [evaluation.md](evaluation.md) before putting a business threshold on either.
 - `decision.expected_level` is only meaningful for `score` questions.
+- A state too long for `--max-length` is cut from the right, silently by default.
+  `decision.input_usage` says how much was read (`state_tokens_used` out of
+  `state_tokens_original`, and `state_truncated`). If an answer about part of a
+  state is worse than no answer, load with
+  `DecisionRuntime.load(path, truncation="error")`: a question whose state would be
+  cut raises `StateTruncatedError`, naming its position in the call, before the
+  model runs. `exu-decide --truncation error` does the same for its whole input
+  before answering any of it.
 
 ### From the command line
 

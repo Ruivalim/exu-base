@@ -25,6 +25,9 @@ Two properties matter and are tested:
   over it raises instead of being cut, and the state is cut first: a rule read
   half-way is worse than no rule. Without a context the sequence is the same as
   it always was.
+- The state is what gets cut, from the right, and every built question says how
+  much: :class:`InputUsage` counts the state before and after the cut, so a
+  caller can refuse an answer about a state the model only partly read.
 - Only builder-owned mask tokens are markers. Literal mask strings are stripped
   from instruction, option, context and state text first, so untrusted input cannot
   inject fake markers.
@@ -62,11 +65,51 @@ class MaskTokenizer(Protocol):
     def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]: ...
 
 
+@dataclass(frozen=True, slots=True)
+class InputUsage:
+    """How much of a question's input a builder kept, in tokens.
+
+    ``state_tokens_original`` counts the state after special-token strings are
+    stripped and before the cut, so planted markers never inflate it.
+    ``total_sequence_tokens`` is the length of every sequence the question became
+    added up (one for the encoder, one per option for the decoder): a count of
+    logical tokens, not of FLOPs or memory, since the decoder shares its prefix.
+    """
+
+    state_tokens_original: int
+    state_tokens_used: int
+    context_tokens: int
+    option_count: int
+    total_sequence_tokens: int
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.state_tokens_used <= self.state_tokens_original:
+            raise ValueError("state_tokens_used must be between 0 and state_tokens_original")
+
+    @property
+    def state_truncated(self) -> bool:
+        """Whether any of the state was cut. An empty state is not a cut one."""
+        return self.state_tokens_used < self.state_tokens_original
+
+    def to_dict(self) -> dict[str, int | bool]:
+        return {
+            "state_tokens_original": self.state_tokens_original,
+            "state_tokens_used": self.state_tokens_used,
+            "state_truncated": self.state_truncated,
+            "context_tokens": self.context_tokens,
+            "option_count": self.option_count,
+            "total_sequence_tokens": self.total_sequence_tokens,
+        }
+
+
 class EncodedDecision(Protocol):
     """One question after a builder has turned it into token ids, in any layout."""
 
     @property
     def option_count(self) -> int: ...
+
+    @property
+    def usage(self) -> InputUsage | None: ...
 
 
 class DecisionBuilder(Protocol):
@@ -150,6 +193,7 @@ class EncodedQuestion:
     attention_mask: tuple[int, ...]
     marker_positions: tuple[int, ...]
     question_type_id: int
+    usage: InputUsage | None = None
 
     @property
     def option_count(self) -> int:
@@ -194,16 +238,21 @@ class SequenceBuilder:
         state_limit = self.config.max_length - len(header) - 1
         if state_limit < 0:
             raise ValueError("header exceeds max_length")
-        input_ids = (
-            *header,
-            *self._encode(clean_state)[:state_limit],
-            self._required(self.tokenizer.sep_token_id),
-        )
+        state_ids = self._encode(clean_state)
+        kept = state_ids[:state_limit]
+        input_ids = (*header, *kept, self._required(self.tokenizer.sep_token_id))
         return EncodedQuestion(
             input_ids=input_ids,
             attention_mask=(1,) * len(input_ids),
             marker_positions=tuple(marker_positions),
             question_type_id=self.config.type_id(question.kind.value),
+            usage=InputUsage(
+                state_tokens_original=len(state_ids),
+                state_tokens_used=len(kept),
+                context_tokens=len(context_ids),
+                option_count=len(marker_positions),
+                total_sequence_tokens=len(input_ids),
+            ),
         )
 
     def pad(

@@ -4,7 +4,7 @@ import pytest
 import torch
 from helpers import save_tiny_checkpoint
 
-from exu import DecisionQuestion, DecisionRuntime, Option
+from exu import DecisionQuestion, DecisionRuntime, Option, StateTruncatedError
 
 
 @pytest.fixture
@@ -74,3 +74,55 @@ def test_ordinal_question_on_cuda_does_not_mix_devices(tmp_path) -> None:
 
     assert decision.expected_level is not None
     assert 0.0 <= decision.expected_level <= 2.0
+
+
+LONG_STATE = " ".join(["payment failed again"] * 400)
+
+
+def test_a_decision_says_how_much_of_its_state_was_read(runtime) -> None:
+    question = DecisionQuestion.noul("Does this describe a failed payment?")
+
+    short = runtime.decide("the payment failed", question).input_usage
+    long = runtime.decide(LONG_STATE, question).input_usage
+
+    assert not short.state_truncated
+    assert short.state_tokens_used == short.state_tokens_original > 0
+    assert long.state_truncated
+    assert long.state_tokens_used < long.state_tokens_original
+    assert long.option_count == 2
+
+
+def test_strict_truncation_names_the_question_before_the_model_runs(tmp_path) -> None:
+    save_tiny_checkpoint(tmp_path / "checkpoint")
+    strict = DecisionRuntime.load(tmp_path / "checkpoint", device="cpu", truncation="error")
+    question = DecisionQuestion.noul("Is it fraud?")
+
+    def forbidden(**_inputs):
+        raise AssertionError("the model ran on a refused batch")
+
+    strict.model = forbidden
+    with pytest.raises(StateTruncatedError) as raised:
+        strict.decide_many([("payment failed", question), (LONG_STATE, question)])
+
+    assert raised.value.index == 1
+    assert raised.value.usage.state_truncated
+    assert "index 1" in str(raised.value)
+
+
+def test_strict_truncation_answers_like_the_default_when_nothing_is_cut(tmp_path) -> None:
+    save_tiny_checkpoint(tmp_path / "checkpoint")
+    allow = DecisionRuntime.load(tmp_path / "checkpoint", device="cpu")
+    strict = DecisionRuntime.load(tmp_path / "checkpoint", device="cpu", truncation="error")
+    pairs = [
+        ("payment failed", DecisionQuestion.noul("Is it fraud?")),
+        ("[MASK]", DecisionQuestion.noul("Is it fraud?")),
+    ]
+
+    assert strict.decide_many(pairs) == allow.decide_many(pairs)
+
+
+def test_an_unknown_truncation_policy_is_refused(tmp_path) -> None:
+    save_tiny_checkpoint(tmp_path / "checkpoint")
+
+    with pytest.raises(ValueError, match="truncation"):
+        DecisionRuntime.load(tmp_path / "checkpoint", device="cpu", truncation="shrink")

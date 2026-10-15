@@ -476,3 +476,54 @@ def test_decide_all_answers_like_decide_many(checkpoint) -> None:
         assert left.probabilities == pytest.approx(right.probabilities, abs=1e-5)
     with pytest.raises(ValueError, match="empty"):
         runtime.decide_all(state, [])
+
+
+def _long_state_record() -> str:
+    row = json.loads(_test_rows()[0])
+    row["id"] = "long"
+    row["state"] = " ".join(["payment failed again"] * 400)
+    return json.dumps(row)
+
+
+def test_every_answer_says_how_much_of_its_state_was_read(capsys, checkpoint, tmp_path) -> None:
+    source = tmp_path / "long.jsonl"
+    source.write_text(_test_rows()[0] + "\n" + _long_state_record() + "\n", encoding="utf-8")
+
+    code, rows, _err = _run(capsys, checkpoint, "--input", str(source))
+
+    assert code == 0
+    assert [row["input_usage"]["state_truncated"] for row in rows] == [False, True]
+    assert set(rows[0]["input_usage"]) == {
+        "state_tokens_original",
+        "state_tokens_used",
+        "state_truncated",
+        "context_tokens",
+        "option_count",
+        "total_sequence_tokens",
+    }
+
+
+def test_strict_truncation_answers_nothing_and_names_the_question(
+    capsys, checkpoint, tmp_path
+) -> None:
+    source = tmp_path / "long.jsonl"
+    lines = [_test_rows()[0], _test_rows()[1], _long_state_record()]
+    source.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    code, rows, err = _run(
+        capsys, checkpoint, "--input", str(source), "--truncation", "error", "--batch-size", "1"
+    )
+
+    assert code == 1
+    assert "question 3:" in err
+    assert "truncation='error'" in err
+    assert rows == []
+
+
+def test_top_only_leaves_the_usage_out(capsys, checkpoint, tmp_path) -> None:
+    source = tmp_path / "one.jsonl"
+    source.write_text(_test_rows()[0] + "\n", encoding="utf-8")
+
+    _code, rows, _err = _run(capsys, checkpoint, "--input", str(source), "--top-only")
+
+    assert "input_usage" not in rows[0]

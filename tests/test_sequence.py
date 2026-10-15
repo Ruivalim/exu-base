@@ -4,7 +4,7 @@ import pytest
 from helpers import FakeTokenizer
 
 from exu import DecisionQuestion, Option
-from exu.sequence import SequenceBuilder, SequenceConfig
+from exu.sequence import InputUsage, SequenceBuilder, SequenceConfig
 
 
 def test_builder_only_emits_owned_markers() -> None:
@@ -140,3 +140,91 @@ def test_builder_requires_mask_and_pad_tokens() -> None:
 
     with pytest.raises(ValueError, match="mask_token_id"):
         SequenceBuilder(Incomplete())
+
+
+def _usage_builder() -> SequenceBuilder:
+    return SequenceBuilder(FakeTokenizer(), SequenceConfig(max_length=32, header_budget=24))
+
+
+def _state_room(builder: SequenceBuilder, question: DecisionQuestion) -> int:
+    """How many state tokens fit: the length left once the header and final SEP are in."""
+    probe = builder.build("s", question)
+    return builder.config.max_length - (len(probe.input_ids) - probe.usage.state_tokens_used)
+
+
+def test_usage_tells_a_state_that_fits_from_one_that_loses_a_token() -> None:
+    builder = _usage_builder()
+    question = DecisionQuestion.choice("Pick the best answer", [Option("A"), Option("B")])
+    room = _state_room(builder, question)
+
+    fits = builder.build(" ".join(["w"] * room), question).usage
+    cut = builder.build(" ".join(["w"] * (room + 1)), question).usage
+
+    assert (fits.state_tokens_original, fits.state_tokens_used) == (room, room)
+    assert not fits.state_truncated
+    assert (cut.state_tokens_original, cut.state_tokens_used) == (room + 1, room)
+    assert cut.state_truncated
+
+
+def test_a_state_cut_to_nothing_is_reported_as_cut() -> None:
+    config = SequenceConfig(
+        max_length=16, header_budget=16, min_instruction_tokens=1, min_option_text_tokens=1
+    )
+    builder = SequenceBuilder(FakeTokenizer(), config)
+    question = DecisionQuestion.choice(
+        "a long instruction that fills it", [Option("A"), Option("B")]
+    )
+    room = _state_room(builder, question)
+    assert room == 0
+
+    usage = builder.build("one two three", question).usage
+
+    assert (usage.state_tokens_original, usage.state_tokens_used) == (3, 0)
+    assert usage.state_truncated
+
+
+def test_an_empty_state_is_not_a_truncated_one() -> None:
+    usage = (
+        _usage_builder()
+        .build("[MASK] [MASK]", DecisionQuestion.choice("Pick", [Option("A"), Option("B")]))
+        .usage
+    )
+
+    assert (usage.state_tokens_original, usage.state_tokens_used) == (0, 0)
+    assert not usage.state_truncated
+
+
+def test_stripped_marker_strings_do_not_inflate_the_original_count() -> None:
+    usage = (
+        _usage_builder()
+        .build(
+            "card [MASK] charged [MA[MASK]SK]",
+            DecisionQuestion.choice("Pick", [Option("A"), Option("B")]),
+        )
+        .usage
+    )
+
+    assert usage.state_tokens_original == 2
+
+
+def test_usage_counts_the_context_the_options_and_the_whole_sequence() -> None:
+    builder = SequenceBuilder(FakeTokenizer(), SequenceConfig(max_length=32, header_budget=32))
+    question = DecisionQuestion.choice("Pick", [Option("A"), Option("B"), Option("C")])
+
+    encoded = builder.build("card charged", question, "refund within thirty days")
+
+    assert encoded.usage.context_tokens == 4
+    assert encoded.usage.option_count == 3
+    assert encoded.usage.total_sequence_tokens == len(encoded.input_ids)
+    assert encoded.usage.to_dict()["state_truncated"] is False
+
+
+def test_usage_refuses_more_used_than_given() -> None:
+    with pytest.raises(ValueError, match="state_tokens_used"):
+        InputUsage(
+            state_tokens_original=2,
+            state_tokens_used=3,
+            context_tokens=0,
+            option_count=2,
+            total_sequence_tokens=10,
+        )

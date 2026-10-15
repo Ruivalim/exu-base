@@ -17,6 +17,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   rows without the field are reported under `missing`, and an unknown field is an
   error. The baselines are the reference-fitted forecasts split by group, never
   refitted on it.
+- `Decision.input_usage` (`InputUsage`): how many tokens of the state the model read
+  out of how many it was given, the context and total sequence tokens and the
+  option count. Both builders fill it, and `exu-decide` prints it unless
+  `--top-only`.
+- `DecisionRuntime(..., truncation="error")` and `DecisionRuntime.load(...,
+  truncation="error")` refuse a state that would be cut with `StateTruncatedError`,
+  before the forward pass. `exu-decide --truncation error` checks the whole input
+  before answering any of it. The default, `allow`, cuts as before.
 - Every `exu-evaluate` report carries `cases`: rows, rows with a `case_id`, and
   distinct cases, `null` when no row has a `case_id`.
 

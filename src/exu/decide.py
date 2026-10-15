@@ -17,6 +17,11 @@ object per question, in input order. The whole input is
 parsed and validated before the first forward pass: a broken line is named and
 nothing is answered, so a pipeline never receives half a result.
 
+Every answer carries ``input_usage``, how much of its state the model read. A state
+too long for the sequence is cut from the right; ``--truncation error`` refuses
+instead, and checks the whole input before the first forward pass, so a refusal
+answers nothing.
+
 ``--top-only`` keeps just the winning option and its calibrated probability.
 ``--metrics`` adds, to every answer, how long its batch took, and prints one JSON
 summary line to stderr, so stdout stays one schema. The time covers the whole
@@ -40,7 +45,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from .data import context_text, question_from_record, state_text
-from .runtime import Decision, DecisionRuntime
+from .runtime import Decision, DecisionRuntime, StateTruncatedError
 from .types import DecisionQuestion, DecisionType, Option
 
 Question = tuple[str | None, str, DecisionQuestion, str | None]
@@ -60,6 +65,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--top-only",
         action="store_true",
         help="answer with the winning option and its probability only",
+    )
+    parser.add_argument(
+        "--truncation",
+        choices=("allow", "error"),
+        default="allow",
+        help="cut a state that does not fit (allow) or refuse the input (error)",
     )
     parser.add_argument(
         "--metrics",
@@ -109,8 +120,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not questions:
             raise ValueError("the input has no questions")
         started = time.perf_counter()
-        runtime = DecisionRuntime.load(args.checkpoint, device=args.device)
+        runtime = DecisionRuntime.load(
+            args.checkpoint, device=args.device, truncation=args.truncation
+        )
         load_ms = (time.perf_counter() - started) * 1000.0
+        if args.truncation == "error":
+            _check_truncation(runtime, questions)
         batch_times: list[float] = []
         with _destination(args.output) as stream:
             start = 0
@@ -295,6 +310,15 @@ def _decide(runtime: DecisionRuntime, chunk: Sequence[Question], first_line: int
         raise
 
 
+def _check_truncation(runtime: DecisionRuntime, questions: Sequence[Question]) -> None:
+    """Build every question once, so a state that would be cut stops the run unanswered."""
+    pairs = [(state, question, context) for _identifier, state, question, context in questions]
+    try:
+        runtime.encode(pairs)
+    except StateTruncatedError as error:
+        raise ValueError(f"question {error.index + 1}: {error.detail}") from error
+
+
 def _render(identifier: str | None, decision: Decision, *, top_only: bool) -> dict[str, Any]:
     row: dict[str, Any] = {} if identifier is None else {"id": identifier}
     if top_only:
@@ -310,6 +334,8 @@ def _render(identifier: str | None, decision: Decision, *, top_only: bool) -> di
         probabilities=dict(zip(decision.option_names, decision.probabilities, strict=True)),
         logits=dict(zip(decision.option_names, decision.logits, strict=True)),
     )
+    if decision.input_usage is not None:
+        row["input_usage"] = decision.input_usage.to_dict()
     return row
 
 

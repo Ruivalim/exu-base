@@ -161,3 +161,48 @@ def test_padded_options_get_no_probability_and_the_minimum_logit() -> None:
     assert output.logits[0, 2] == torch.finfo(output.logits.dtype).min
     assert torch.allclose(output.probabilities.sum(dim=-1), torch.ones(2))
     assert output.action_logits.shape == (2, 2)
+
+
+def test_usage_counts_the_state_once_and_every_sequence() -> None:
+    builder = _builder(max_length=40, header_budget=30)
+    question = _question("billing", "the support refund team")
+    state = " ".join(["card"] * 200)
+
+    encoded = builder.build(state, question)
+    original = len(builder.tokenizer.encode(state, add_special_tokens=False))
+
+    assert encoded.usage.state_tokens_original == original
+    assert encoded.usage.state_tokens_used == encoded.prefix_length - len(builder._lead)
+    assert encoded.usage.state_truncated
+    assert encoded.usage.option_count == 2
+    assert encoded.usage.total_sequence_tokens == sum(len(s) for s in encoded.sequences)
+
+
+def test_usage_tells_a_decoder_state_that_fits_from_one_that_loses_a_token() -> None:
+    builder = _builder(max_length=40, header_budget=30)
+    question = _question("billing", "support")
+    room = builder.build(" ".join(["card"] * 200), question).usage.state_tokens_used
+
+    def state_of(tokens: int) -> str:
+        ids = builder.build(" ".join(["card"] * 200), question).sequences[0]
+        lead = len(builder._lead)
+        return builder.tokenizer.decode(list(ids[lead : lead + tokens]))
+
+    fits = builder.build(state_of(room), question).usage
+    cut = builder.build(state_of(room) + " card", question).usage
+
+    assert not fits.state_truncated
+    assert fits.state_tokens_used == fits.state_tokens_original == room
+    assert cut.state_truncated
+    assert cut.state_tokens_used == room
+
+
+def test_stripped_special_tokens_do_not_inflate_the_decoder_count() -> None:
+    builder = _builder()
+    question = _question("billing", "support")
+
+    clean = builder.build("card was charged", question).usage
+    attacked = builder.build("card <e<eos>os>was <pad>charged<eos>", question).usage
+
+    assert attacked.state_tokens_original == clean.state_tokens_original
+    assert attacked.context_tokens == 0

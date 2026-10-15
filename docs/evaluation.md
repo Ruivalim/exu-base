@@ -169,6 +169,25 @@ latency grows with the total option count, more slowly than the encoder's grows
 with the question count. Measure on the hardware you will deploy on, not the
 one you trained on.
 
+## Input usage
+
+Every runtime decision, and every `exu-decide` answer without `--top-only`, carries
+`input_usage`:
+
+| Field | Meaning |
+| --- | --- |
+| `state_tokens_original` | Tokens of the state after special-token strings are stripped, before the cut. |
+| `state_tokens_used` | Tokens of the state the model read. The cut is from the right. |
+| `state_truncated` | `used < original`. An empty state is not a truncated one. |
+| `context_tokens` | Tokens of the context; a context is refused, never cut. |
+| `option_count` | Options of the question. |
+| `total_sequence_tokens` | The length of every sequence the question became, added up: one for an encoder checkpoint, one per option for a decoder. |
+
+`total_sequence_tokens` counts logical tokens. It is not a FLOP count or a memory
+estimate: a decoder checkpoint runs the prefix shared by a question's options once.
+Count truncated states on your own traffic before trusting an accuracy measured on
+short ones; `truncation="error"` turns a cut into a refusal instead.
+
 ## Before you claim a number
 
 - Calibration claims must come from held-out data, never from training data.

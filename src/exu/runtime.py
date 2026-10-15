@@ -9,6 +9,13 @@ confuse:
 - ``entropy_confidence`` is one minus normalized entropy. It is smaller for the
   same distribution (0.85 top probability over four options is about 0.58 here),
   so a threshold copied from the other scale will behave differently.
+
+Every decision also carries ``input_usage``: how many tokens of the state the model
+read, out of how many it was given. A state longer than the sequence is cut from
+the right, which is the default (``truncation="allow"``). With
+``truncation="error"`` the runtime refuses instead, before the forward pass, and
+names the question: an answer about the first half of a trace is an answer about
+a different trace.
 """
 
 from __future__ import annotations
@@ -16,7 +23,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal
 
 import torch
 from torch import Tensor
@@ -25,6 +32,7 @@ from .architecture import builder_for
 from .calibration import TemperatureMap
 from .checkpoint import Checkpoint, load_checkpoint, load_tokenizer
 from .devices import resolve_device
+from .sequence import InputUsage
 from .types import DecisionQuestion, DecisionType
 
 if TYPE_CHECKING:
@@ -44,6 +52,26 @@ class Decision:
     expected_level: float | None
     label: str
     should_act: bool
+    input_usage: InputUsage | None = None
+
+
+Truncation = Literal["allow", "error"]
+
+
+class StateTruncatedError(ValueError):
+    """A state did not fit and the runtime was told not to cut it.
+
+    ``index`` is the question's position in the call, ``usage`` what was counted.
+    """
+
+    def __init__(self, index: int, usage: InputUsage) -> None:
+        self.index = index
+        self.usage = usage
+        self.detail = (
+            f"the state takes {usage.state_tokens_original} tokens and only "
+            f"{usage.state_tokens_used} fit; truncation='error' refuses to cut it"
+        )
+        super().__init__(f"question at index {index}: {self.detail}")
 
 
 class DecisionRuntime:
@@ -54,7 +82,12 @@ class DecisionRuntime:
         checkpoint: Checkpoint,
         tokenizer: PreTrainedTokenizerBase,
         device: torch.device,
+        *,
+        truncation: Truncation = "allow",
     ) -> None:
+        if truncation not in ("allow", "error"):
+            raise ValueError("truncation must be 'allow' or 'error'")
+        self.truncation = truncation
         self.checkpoint = checkpoint
         self.model = checkpoint.model
         self.tokenizer = tokenizer
@@ -63,11 +96,13 @@ class DecisionRuntime:
         self.temperature: TemperatureMap = checkpoint.temperature
 
     @classmethod
-    def load(cls, path: str | Path, device: str = "auto") -> DecisionRuntime:
+    def load(
+        cls, path: str | Path, device: str = "auto", *, truncation: Truncation = "allow"
+    ) -> DecisionRuntime:
         resolved = resolve_device(device)
         checkpoint = load_checkpoint(path, device=resolved)
         tokenizer = load_tokenizer(path)
-        return cls(checkpoint, tokenizer, resolved)
+        return cls(checkpoint, tokenizer, resolved, truncation=truncation)
 
     def decide(
         self, state: str, question: DecisionQuestion, context: str | None = None
@@ -90,9 +125,7 @@ class DecisionRuntime:
         pairs: Sequence[tuple[str, DecisionQuestion] | tuple[str, DecisionQuestion, str | None]],
     ) -> list[Decision]:
         """Answer ``(state, question)`` or ``(state, question, context)`` items, in one pass."""
-        if not pairs:
-            raise ValueError("pairs cannot be empty")
-        encoded = [self.builder.build(*item) for item in pairs]
+        encoded = self.encode(pairs)
         inputs = self.builder.tensors(encoded, self.device)
         temperatures = torch.tensor(
             [
@@ -105,12 +138,39 @@ class DecisionRuntime:
         with torch.inference_mode():
             output = self.model(**inputs, temperature=temperatures)
         return [
-            self._decision(question, output.logits[row], output.probabilities[row])
-            for row, (_state, question, *_context) in enumerate(pairs)
+            self._decision(question, output.logits[row], output.probabilities[row], item.usage)
+            for row, ((_state, question, *_context), item) in enumerate(
+                zip(pairs, encoded, strict=True)
+            )
         ]
 
+    def encode(
+        self,
+        pairs: Sequence[tuple[str, DecisionQuestion] | tuple[str, DecisionQuestion, str | None]],
+    ) -> list[Any]:
+        """Build every item and apply the truncation policy, without running the model.
+
+        Raises :class:`StateTruncatedError` for the first item whose state was cut
+        when ``truncation="error"``. A caller can run this over a whole input before
+        answering any of it.
+        """
+        if not pairs:
+            raise ValueError("pairs cannot be empty")
+        encoded = [self.builder.build(*item) for item in pairs]
+        if self.truncation == "error":
+            for index, item in enumerate(encoded):
+                if item.usage is None:
+                    raise ValueError("this builder reports no input usage to check")
+                if item.usage.state_truncated:
+                    raise StateTruncatedError(index, item.usage)
+        return encoded
+
     def _decision(
-        self, question: DecisionQuestion, logits: Tensor, probabilities: Tensor
+        self,
+        question: DecisionQuestion,
+        logits: Tensor,
+        probabilities: Tensor,
+        usage: InputUsage | None,
     ) -> Decision:
         count = len(question.options)
         probs = probabilities[:count]
@@ -132,6 +192,7 @@ class DecisionRuntime:
             expected_level=expected_level,
             label=question.options[winner].name,
             should_act=bool(self.model.config.action_costs.should_act(confidence)),
+            input_usage=usage,
         )
 
 

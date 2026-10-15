@@ -132,6 +132,17 @@ print(decision.label, decision.confidence)  # billing 0.87
 decisions = runtime.decide_all(ticket, [route, urgency, refund])  # one state, many questions
 ```
 
+A state longer than the sequence is cut from the right, and every decision says
+how much of it the model read:
+
+```python
+usage = decision.input_usage
+if usage.state_truncated:
+    print(f"read {usage.state_tokens_used} of {usage.state_tokens_original} state tokens")
+
+strict = DecisionRuntime.load("artifacts/my-model", truncation="error")  # refuse instead
+```
+
 Or from a shell, one question with flags or a JSONL batch with `--input`, where a
 record can carry one `question` or a list of `questions` about its state:
 

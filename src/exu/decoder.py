@@ -70,7 +70,7 @@ from .model import (
     _distribution_features,
     masked_softmax,
 )
-from .sequence import SequenceConfig, context_ids
+from .sequence import InputUsage, SequenceConfig, context_ids
 from .types import DecisionQuestion
 
 if TYPE_CHECKING:
@@ -94,6 +94,7 @@ class EncodedOptions:
     question_type_id: int
     prefix_length: int
     """Leading tokens every sequence shares: the lead and the state."""
+    usage: InputUsage | None = None
 
     def __post_init__(self) -> None:
         if not self.sequences:
@@ -159,12 +160,22 @@ class DecoderSequenceBuilder:
         room = self.config.max_length - longest
         if room < 0:
             raise ValueError("the context and the question leave no room in max_length")
-        prefix = (*lead, *self._encode(self._clean(state))[:room])
+        state_ids = self._encode(self._clean(state))
+        kept = state_ids[:room]
+        prefix = (*lead, *kept)
         eos = self.tokenizer.eos_token_id
+        sequences = tuple((*prefix, *tail, eos) for tail in tails)
         return EncodedOptions(
-            sequences=tuple((*prefix, *tail, eos) for tail in tails),
+            sequences=sequences,
             question_type_id=self.config.type_id(question.kind.value),
             prefix_length=len(prefix),
+            usage=InputUsage(
+                state_tokens_original=len(state_ids),
+                state_tokens_used=len(kept),
+                context_tokens=len(ids),
+                option_count=len(sequences),
+                total_sequence_tokens=sum(len(sequence) for sequence in sequences),
+            ),
         )
 
     def tensors(

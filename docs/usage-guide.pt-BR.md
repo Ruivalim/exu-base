@@ -366,6 +366,14 @@ print(decision.label, decision.probabilities, decision.confidence, decision.shou
   [evaluation.md](evaluation.md) antes de pôr um limiar de negócio em qualquer
   uma das duas.
 - `decision.expected_level` só faz sentido em perguntas `score`.
+- Um estado longo demais para o `--max-length` é cortado pela direita, sem aviso
+  por padrão. `decision.input_usage` diz quanto foi lido (`state_tokens_used` de
+  `state_tokens_original`, e `state_truncated`). Se uma resposta sobre parte do
+  estado é pior que nenhuma, carregue com
+  `DecisionRuntime.load(path, truncation="error")`: uma pergunta cujo estado seria
+  cortado levanta `StateTruncatedError`, com a posição dela na chamada, antes de o
+  modelo rodar. `exu-decide --truncation error` faz o mesmo com a entrada inteira
+  antes de responder qualquer coisa.
 
 ### Pela linha de comando
 
